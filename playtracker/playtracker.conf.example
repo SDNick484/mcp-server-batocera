@@ -1,0 +1,22 @@
+# Batocera play tracker settings.
+# Copy to /userdata/system/configs/playtracker.conf and `chmod 600` it (it holds the MQTT password).
+
+# Home Assistant's Mosquitto broker. Create a dedicated Home Assistant user for this
+# (Settings > People > Users, e.g. "batocera"); the Mosquitto add-on accepts HA users.
+MQTT_HOST=homeassistant.local
+MQTT_PORT=1883
+MQTT_USER=batocera
+MQTT_PASSWORD=change-me
+
+# Topics: <TOPIC_PREFIX>/<DEVICE_ID>/now_playing, .../last_session, .../session, .../status
+TOPIC_PREFIX=batocera
+DEVICE_ID=nicks_arcade
+DEVICE_NAME=Nick's Arcade
+DISCOVERY_PREFIX=homeassistant
+
+# Sessions shorter than this aren't logged (accidental launches, quick peeks).
+MIN_SESSION_SECONDS=60
+
+# Batocera's screensaver never launches games itself; with "Screensaver controls" on,
+# pressing START on a screensaver video launches that game. yes = don't log those.
+IGNORE_SCREENSAVER_LAUNCHES=yes

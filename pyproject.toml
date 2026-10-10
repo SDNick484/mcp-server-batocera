@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcp-server-batocera"
+version = "0.1.0"
+description = "MCP server for Batocera retro-gaming cabinets, via the EmulationStation web API and RetroArch network commands"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Nicholas E. Andrade" }]
+requires-python = ">=3.11"
+keywords = ["mcp", "mcp-server", "batocera", "emulationstation", "retroarch", "arcade", "home-assistant"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Games/Entertainment :: Arcade",
+]
+dependencies = [
+    "mcp>=2.3,<3",
+    "httpx>=0.27",
+    "typing_extensions>=4.7",
+]
+
+[project.urls]
+Homepage = "https://github.com/SDNick484/mcp-server-batocera"
+Issues = "https://github.com/SDNick484/mcp-server-batocera/issues"
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "anyio>=4", "ruff>=0.6", "mypy>=1.11"]
+
+[project.scripts]
+mcp-server-batocera = "batocera_mcp.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# pycodestyle, pyflakes, isort, pyupgrade, bugbear, simplify
+select = ["E", "W", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+files = ["src", "playtracker"]
+strict = true
