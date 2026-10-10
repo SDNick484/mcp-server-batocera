@@ -28,6 +28,7 @@ log = logging.getLogger(__name__)
 
 COMMANDS = frozenset({"GET_STATUS", "PAUSE_TOGGLE", "SAVE_STATE", "LOAD_STATE", "SCREENSHOT", "RESET"})
 
+# ASSUMPTION B-RA-ENABLE: batocera.conf's global.retroarch.network_cmd_enable=true turns this on.
 NOT_ANSWERING = (
     "RetroArch isn't answering on UDP {port}. Either no RetroArch (libretro) game is running (standalone "
     "emulators such as Dolphin or PCSX2 don't support this), or network commands are off: add "
@@ -41,6 +42,7 @@ class RetroArchStatus(TypedDict):
     game: str | None
 
 
+# ASSUMPTION B-RA-STATUS
 def parse_status(reply: str) -> RetroArchStatus | None:
     parts = reply.strip().split(" ", 2)
     if len(parts) < 2 or parts[0] != "GET_STATUS":

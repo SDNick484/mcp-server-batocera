@@ -115,6 +115,7 @@ GameIdArg = Annotated[
 # --- Reading -----------------------------------------------------------------
 class Status(TypedDict):
     url: str
+    dry_run: bool
     reachable: bool
     error: str | None
     es_version: str | None
@@ -128,6 +129,7 @@ async def get_status() -> Status:
     """Report whether the cabinet's EmulationStation is reachable, which game is running (if any), and whether
     EmulationStation is busy (scraping, updating). While a RetroArch game runs, retroarch says whether it is
     playing or paused; it is null for standalone emulators or when RetroArch network commands are off.
+    dry_run true means actions are reported, not sent.
     """
     c = es()
     try:
@@ -137,6 +139,7 @@ async def get_status() -> Status:
     except BatoceraError as exc:
         return Status(
             url=c.settings.url,
+            dry_run=c.settings.dry_run,
             reachable=False,
             error=str(exc),
             es_version=None,
@@ -146,6 +149,7 @@ async def get_status() -> Status:
         )
     return Status(
         url=c.settings.url,
+        dry_run=c.settings.dry_run,
         reachable=True,
         error=None,
         es_version=version,
@@ -221,7 +225,7 @@ async def find_games(
     if query and not query_words:
         raise BatoceraError("The query has no letters or digits to match.")
 
-    sem = asyncio.Semaphore(2)  # EmulationStation serves the API from a 2-thread pool
+    sem = asyncio.Semaphore(2)  # ASSUMPTION B-ES-THREADS: EmulationStation serves the API from 2 threads
 
     async def load(n: str) -> dict[str, dict[str, Any]]:
         async with sem:
@@ -263,6 +267,38 @@ async def get_game(system: SystemArg, game_id: GameIdArg) -> GameDetails:
 
 
 # --- Acting --------------------------------------------------------------------
+# Every tool that changes something returns an ActionResult, the same shape as the
+# sibling servers' (Shield, Onkyo, Harmony, Sofabaton): structured, so a client can
+# read `outcome` and `sent` without parsing prose, with `detail` one sentence for the
+# user. Failures aren't an outcome: they're isError results (BatoceraError).
+Outcome = Literal["done", "unchanged", "dry_run"]
+
+
+class ActionResult(TypedDict):
+    cabinet: str  # BATOCERA_NAME, or the cabinet's address
+    outcome: Outcome
+    detail: str
+    sent: list[str]  # what went to the cabinet (or, in a dry run, would have)
+    warnings: list[str]
+
+
+def _result(detail: str, sent: list[str], outcome: Outcome = "done", warnings: list[str] | None = None) -> ActionResult:
+    settings = es().settings
+    if outcome == "dry_run":
+        detail = f"DRY RUN, nothing sent: would {detail}"
+    return ActionResult(
+        cabinet=settings.name or settings.host or "the cabinet",
+        outcome=outcome,
+        detail=detail,
+        sent=sent,
+        warnings=warnings or [],
+    )
+
+
+def _dry() -> bool:
+    return es().settings.dry_run
+
+
 async def _wait_for(check: Callable[[], Any], timeout: float) -> Any:
     deadline = asyncio.get_running_loop().time() + timeout
     while True:
@@ -275,7 +311,7 @@ async def _wait_for(check: Callable[[], Any], timeout: float) -> Any:
 
 
 @mcp.tool(title="Launch a game", annotations=_SET)
-async def launch_game(system: SystemArg, game_id: GameIdArg) -> str:
+async def launch_game(system: SystemArg, game_id: GameIdArg) -> ActionResult:
     """Start a game on the cabinet (find its id with find_games). Refuses if a different game is already
     running: quit_game first, after checking with the user. Succeeds only once the game is confirmed running.
     """
@@ -288,7 +324,7 @@ async def launch_game(system: SystemArg, game_id: GameIdArg) -> str:
     running = await c.running_game()
     if running:
         if running.get("id") == gid:
-            return f"{name} is already running."
+            return _result(f"{name} is already running.", [], "unchanged")
         raise BatoceraError(
             f"{running.get('name', 'Another game')} ({running.get('systemName', '?')}) is running. "
             "Quit it with quit_game first (ask the user: unsaved progress is lost)."
@@ -297,14 +333,19 @@ async def launch_game(system: SystemArg, game_id: GameIdArg) -> str:
     path = raw.get("path")
     if not isinstance(path, str) or not path:
         raise BatoceraError(f"EmulationStation's entry for {name} has no path.")
+    sent = [f"POST /launch {path}"]
+    if _dry():
+        return _result(f"launch {name} ({s})", sent, "dry_run")
     await c.launch(path)
 
+    # ASSUMPTION B-ES-LAUNCH: /launch answers 200 even for a path it doesn't know, and the game starts a
+    # moment later; only /runningGame says whether it worked.
     async def started() -> dict[str, Any] | None:
         g = await c.running_game()
         return g if g and g.get("id") == gid else None
 
     if await _wait_for(started, LAUNCH_TIMEOUT_S):
-        return f"Launched {name} ({s})."
+        return _result(f"Launched {name} ({s}).", sent)
     other = await c.running_game()
     if other:
         raise BatoceraError(f"Something else started instead: {other.get('name')}.")
@@ -315,22 +356,25 @@ async def launch_game(system: SystemArg, game_id: GameIdArg) -> str:
 
 
 @mcp.tool(title="Quit the running game", annotations=_LOSES_PROGRESS)
-async def quit_game() -> str:
+async def quit_game() -> ActionResult:
     """Quit the running game and return to EmulationStation. Unsaved progress is lost: ask first if someone
     may be playing (use save_state first for a RetroArch game if they want to keep it).
     """
     c = es()
     running = await c.running_game()
     if running is None:
-        return "No game is running."
+        return _result("No game is running.", [], "unchanged")
     name = running.get("name", "the game")
+    sent = ["GET /emukill"]
+    if _dry():
+        return _result(f"quit {name}", sent, "dry_run")
     await c.emukill()
 
-    async def stopped() -> bool:
+    async def stopped() -> bool:  # ASSUMPTION B-ES-EMUKILL
         return await c.running_game() is None
 
     if await _wait_for(stopped, QUIT_TIMEOUT_S):
-        return f"Quit {name}."
+        return _result(f"Quit {name}.", sent)
     raise BatoceraError(f"Asked the emulator to stop, but {name} is still running after {QUIT_TIMEOUT_S:g}s.")
 
 
@@ -344,74 +388,93 @@ async def show_message(
             "popup: a frontend dialog that stays until someone presses a button."
         ),
     ] = "auto",
-) -> str:
+) -> ActionResult:
     """Show a message on the cabinet's screen, e.g. 'Dinner in 5 minutes!'."""
     t = _check(cfg.message_text, text)
     c = es()
     if style == "auto" and await c.running_game():
         status = await ra().status()
         if status and status["state"] != "contentless":
-            await ra().show_message(" ".join(t.split()))
-            return "Shown over the running game."
-        # A standalone emulator covers the frontend, so a notification wouldn't be seen.
+            one_line = " ".join(t.split())
+            sent = [f"UDP SHOW_MSG {one_line}"]
+            if _dry():
+                return _result("show the message over the running game", sent, "dry_run")
+            await ra().show_message(one_line)
+            return _result("Shown over the running game.", sent)
+        # ASSUMPTION B-ES-MESSAGES: frontend notifications aren't visible over a running emulator.
         raise BatoceraError(
             "A game is running in an emulator that can't show messages (or RetroArch network commands are off), "
             "so the message wouldn't be visible. Try again when no game is running."
         )
-    await c.notify(t, popup=style == "popup")
-    return "Shown as a popup." if style == "popup" else "Shown as a notification."
+    popup = style == "popup"
+    sent = [f"POST {'/messagebox' if popup else '/notify'} {t}"]
+    if _dry():
+        return _result(f"show the message as a {'popup' if popup else 'notification'}", sent, "dry_run")
+    await c.notify(t, popup=popup)
+    return _result("Shown as a popup." if popup else "Shown as a notification.", sent)
 
 
 @mcp.tool(title="Rescan game lists", annotations=_SET)
-async def reload_games() -> str:
+async def reload_games() -> ActionResult:
     """Make EmulationStation rescan its game lists, e.g. after ROMs were added to the cabinet or its share."""
+    sent = ["GET /reloadgames"]
+    if _dry():
+        return _result("rescan the game lists", sent, "dry_run")
     await es().reload_games()
-    return "EmulationStation is reloading its game lists."
+    return _result("EmulationStation is reloading its game lists.", sent)
 
 
 # --- RetroArch -------------------------------------------------------------------
+# ASSUMPTION B-RA-COMMANDS: each command does what its name says; only GET_STATUS answers.
+async def _retroarch(command: str, verb: str, done: str) -> ActionResult:
+    s = await ra().require_game()
+    game = s["game"] or "the game"
+    sent = [f"UDP {command}"]
+    if _dry():
+        return _result(f"{verb} {game}", sent, "dry_run")
+    await ra().send(command)
+    return _result(done.format(game=game), sent)
+
+
 @mcp.tool(title="Pause or resume", annotations=_SET)
-async def pause_game(paused: bool) -> str:
+async def pause_game(paused: bool) -> ActionResult:
     """Pause (paused=true) or resume (paused=false) the running RetroArch game."""
     r = ra()
     s = await r.require_game()
     if (s["state"] == "paused") == paused:
-        return "Already paused." if paused else "Already running."
+        return _result("Already paused." if paused else "Already running.", [], "unchanged")
+    sent = ["UDP PAUSE_TOGGLE"]
+    if _dry():
+        return _result("pause the game" if paused else "resume the game", sent, "dry_run")
     await r.send("PAUSE_TOGGLE")
     await asyncio.sleep(0.2)
     after = await r.status()
     if after and (after["state"] == "paused") == paused:
-        return "Paused." if paused else "Resumed."
+        return _result("Paused." if paused else "Resumed.", sent)
     raise BatoceraError("Sent pause/resume, but RetroArch's state didn't change.")
 
 
 @mcp.tool(title="Save state", annotations=_ACT)
-async def save_state() -> str:
+async def save_state() -> ActionResult:
     """Save the running RetroArch game's state to its current save slot (overwrites that slot)."""
-    s = await ra().require_game()
-    await ra().send("SAVE_STATE")
-    return f"Saved state for {s['game'] or 'the game'} (current slot)."
+    return await _retroarch("SAVE_STATE", "save state for", "Saved state for {game} (current slot).")
 
 
 @mcp.tool(title="Load state", annotations=_LOSES_PROGRESS)
-async def load_state() -> str:
+async def load_state() -> ActionResult:
     """Load the running RetroArch game's state from its current slot. Progress since that save is lost."""
-    s = await ra().require_game()
-    await ra().send("LOAD_STATE")
-    return f"Loaded the saved state for {s['game'] or 'the game'}."
+    return await _retroarch("LOAD_STATE", "load the saved state for", "Loaded the saved state for {game}.")
 
 
 @mcp.tool(title="Take a screenshot", annotations=_ACT)
-async def take_screenshot() -> str:
+async def take_screenshot() -> ActionResult:
     """Save a screenshot of the running RetroArch game to the cabinet's screenshots folder."""
-    await ra().require_game()
-    await ra().send("SCREENSHOT")
-    return "Screenshot saved on the cabinet (/userdata/screenshots)."
+    return await _retroarch(
+        "SCREENSHOT", "take a screenshot of", "Screenshot of {game} saved in /userdata/screenshots."
+    )
 
 
 @mcp.tool(title="Reset the game", annotations=_LOSES_PROGRESS)
-async def reset_game() -> str:
+async def reset_game() -> ActionResult:
     """Reset the running RetroArch game, like pressing the console's reset button. Unsaved progress is lost."""
-    s = await ra().require_game()
-    await ra().send("RESET")
-    return f"Reset {s['game'] or 'the game'}."
+    return await _retroarch("RESET", "reset", "Reset {game}.")

@@ -91,6 +91,7 @@ def yes(value: str) -> bool:
 
 
 # --- Arguments ---------------------------------------------------------------------
+# ASSUMPTION B-PT-GAME-ARGS: game-start's path is backslash-escaped, game-selected's is not.
 def unescape(path: str) -> str:
     """EmulationStation backslash-escapes shell characters in the game-start ROM path."""
     return re.sub(r"\\(.)", r"\1", path)
@@ -148,6 +149,7 @@ def base_topic(conf: dict[str, str]) -> str:
     return f"{conf['TOPIC_PREFIX'].strip('/')}/{conf['DEVICE_ID']}"
 
 
+# ASSUMPTION B-PT-HA-MQTT: Home Assistant's MQTT discovery builds the entities from these.
 def discovery_messages(conf: dict[str, str]) -> list[Message]:
     base = base_topic(conf)
     dev_id = conf["DEVICE_ID"]
@@ -252,7 +254,7 @@ class Tracker:
     def handle(self, event: str, args: list[str]) -> list[Message]:
         now = self.clock()
         out: list[Message] = []
-        # Discovery once per boot (/tmp is cleared on reboot); entities stay defined in HA via retain.
+        # Discovery once per boot (ASSUMPTION B-PT-TMP: /tmp is cleared on reboot); retain keeps the entities.
         marker = self.state.root / "announced"
         announced = False
         if not marker.exists() and event not in ("game-selected", "system-selected"):
@@ -287,6 +289,8 @@ class Tracker:
             out += self._end_session(now)
         return out
 
+    # ASSUMPTION B-PT-SCREENSAVER: the screensaver never launches a game itself, only selects games to show.
+    # ASSUMPTION B-PT-SCREENSAVER-START: START on its video fires screensaver-stop and game-start, either order.
     def _launched_from_screensaver(self, rom: str, now: float) -> bool:
         ss = self.state.read("screensaver")
         recent = bool(ss.get("active")) or (now - float(ss.get("stopped_at", 0) or 0)) <= SCREENSAVER_GRACE_S
@@ -488,6 +492,7 @@ HANDLED = {
 }
 
 
+# ASSUMPTION B-PT-SCRIPTS: EmulationStation runs this on every event, event name first, asynchronously.
 def main(argv: list[str]) -> int:
     if len(argv) < 2 or argv[1] not in HANDLED:
         return 0  # system-selected, config-changed, ...: nothing to do, exit fast
