@@ -136,7 +136,7 @@ Play counts and play time come from EmulationStation itself (it records them in 
 Every tool that changes something returns the same structured result as the sibling servers:
 
 ```json
-{ "cabinet": "Nick's Arcade", "outcome": "done", "detail": "Launched Galaga (mame).",
+{ "cabinet": "Game Room", "outcome": "done", "detail": "Launched Galaga (mame).",
   "sent": ["POST /launch /userdata/roms/mame/galaga.zip"], "warnings": [] }
 ```
 
@@ -186,7 +186,8 @@ Two filters on top of that:
                           chmod 600 /userdata/system/configs/playtracker.conf'
    ```
 3. Edit `playtracker.conf` (broker host, user, password, device name), then restart EmulationStation or
-   reboot. The *Nick's Arcade* device appears in Home Assistant under MQTT.
+   reboot. A device named after `DEVICE_NAME` (*Batocera* unless you change it) appears in Home
+   Assistant under MQTT.
 
 Scripts directly in `.../emulationstation/scripts/` get every event, with the event name first. This
 doesn't interfere with Pixelcade's per-event scripts in the subfolders. To debug, read
@@ -194,18 +195,19 @@ doesn't interfere with Pixelcade's per-event scripts in the subfolders. To debug
 
 ### Entities
 
-Home Assistant names the entities after the device, so with `DEVICE_NAME=Nick's Arcade` they come out
-as below (check the device page for the exact IDs).
+Home Assistant names the entities after the device, so with the default `DEVICE_NAME=Batocera` they
+come out as below. Rename the device and they follow: `DEVICE_NAME=Game Room Arcade` gives
+`sensor.game_room_arcade_now_playing`, and so on. Check the device page for the exact IDs.
 
-| Entity                                  | State                     | Attributes                                   |
-| --------------------------------------- | ------------------------- | -------------------------------------------- |
-| `sensor.nick_s_arcade_now_playing`       | game name, or `Idle`      | system, rom, started, source                 |
-| `binary_sensor.nick_s_arcade_playing`    | on while a game runs      |                                              |
-| `sensor.nick_s_arcade_now_playing_system`| system name               |                                              |
-| `sensor.nick_s_arcade_last_session`      | last game played          | system, rom, started, ended, duration_s      |
-| `sensor.nick_s_arcade_last_session_duration` | minutes               |                                              |
-| `event.nick_s_arcade_game_session`       | fires `session_end`       | game, system, started, ended, duration_s     |
-| availability                            | `batocera/<id>/status`    | online/offline (set on start, quit, shutdown, sleep) |
+| Entity                                  | State                  | Attributes                                           |
+| --------------------------------------- | ---------------------- | ---------------------------------------------------- |
+| `sensor.batocera_now_playing`           | game name, or `Idle`   | system, rom, started, source                         |
+| `binary_sensor.batocera_playing`        | on while a game runs   |                                                      |
+| `sensor.batocera_now_playing_system`    | system name            |                                                      |
+| `sensor.batocera_last_session`          | last game played       | system, rom, started, ended, duration_s              |
+| `sensor.batocera_last_session_duration` | minutes                |                                                      |
+| `event.batocera_game_session`           | fires `session_end`    | game, system, started, ended, duration_s             |
+| availability                            | `batocera/<id>/status` | online/offline (set on start, quit, shutdown, sleep) |
 
 Each logged session is one `session_end` event, so it shows up in the logbook, history and automations.
 Daily play time:
@@ -214,7 +216,7 @@ Daily play time:
 sensor:
   - platform: history_stats
     name: Arcade play time today
-    entity_id: binary_sensor.nick_s_arcade_playing
+    entity_id: binary_sensor.batocera_playing
     state: "on"
     type: time
     start: "{{ today_at() }}"
