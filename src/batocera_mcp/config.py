@@ -83,6 +83,10 @@ class Settings:
     url: str
     timeout_s: float = DEFAULT_TIMEOUT_S
     retroarch_port: int = RETROARCH_PORT
+    # Read everything, change nothing: actions report what they would send.
+    dry_run: bool = False
+    # How results and messages name the cabinet; defaults to its address.
+    name: str | None = None
 
     @property
     def host(self) -> str:
@@ -110,7 +114,11 @@ def _read_json(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def load_settings() -> Settings:
+def flag(value: object) -> bool:
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+def load_settings(dry_run: bool | None = None) -> Settings:
     data = _read_json(config_dir() / "config.json")
     url = os.environ.get("BATOCERA_URL") or data.get("url") or DEFAULT_URL
     timeout = DEFAULT_TIMEOUT_S
@@ -130,4 +138,13 @@ def load_settings() -> Settings:
         except (TypeError, ValueError):
             log.warning("Ignoring retroarch_port %r", raw_port)
             port = RETROARCH_PORT
-    return Settings(url=normalize_url(str(url)), timeout_s=timeout, retroarch_port=port)
+    if dry_run is None:
+        dry_run = flag(os.environ.get("BATOCERA_DRY_RUN", data.get("dry_run", False)))
+    name = os.environ.get("BATOCERA_NAME") or data.get("name") or None
+    return Settings(
+        url=normalize_url(str(url)),
+        timeout_s=timeout,
+        retroarch_port=port,
+        dry_run=dry_run,
+        name=str(name) if name else None,
+    )

@@ -12,17 +12,23 @@ reasoning behind non-obvious changes instead of only making them.
 
 ## Layout
 
-- `src/batocera_mcp/config.py`: settings (`BATOCERA_URL`, RetroArch port) and validators (system name,
-  game id, message text)
+- `src/batocera_mcp/config.py`: settings (`BATOCERA_URL`, RetroArch port, dry run, name) and validators
+  (system name, game id, message text)
 - `src/batocera_mcp/client.py`: `EmulationStationClient` (httpx, game-list cache), value parsers, `BatoceraError`
 - `src/batocera_mcp/retroarch.py`: UDP client, `COMMANDS` allow-list, `GET_STATUS` parser
-- `src/batocera_mcp/server.py`: MCP tools (`MCPServer` from `mcp` 2.x)
-- `src/batocera_mcp/cli.py`: `serve` (default) and `check`
+- `src/batocera_mcp/server.py`: MCP tools (`MCPServer` from `mcp` 2.x); actions return `ActionResult`
+- `src/batocera_mcp/assumptions.py`: every Batocera behavior relied on, by id, with source and status
+- `src/batocera_mcp/doctor.py`: layer-by-layer checks; `STEP` maps layers to HARDWARE_VALIDATION.md steps
+- `src/batocera_mcp/sim/fake_cabinet.py`: wire-level fake (ES over real HTTP, RetroArch over real UDP), with
+  fault switches; used by the tests and `simulate`
+- `src/batocera_mcp/logsafe.py`: log redaction, **byte-identical** across the sibling servers
+- `src/batocera_mcp/cli.py`: `serve` (default), `doctor` (`check`), `simulate`, `call`
 - `playtracker/playtracker.py`: runs **on the cabinet**, stdlib only (no pip on Batocera), single file.
   `Tracker` (pure session logic), a minimal MQTT 3.1.1 QoS 1 publisher, and an outbox for broker outages
-- `tests/`: `conftest.py` (`FakeES` on `httpx.MockTransport`, `FakeRetroArch` on a real UDP socket),
-  `test_units`, `test_tools` (in-process MCP `Client`), `test_playtracker` (loaded from its file path;
-  `FakeBroker` speaks enough MQTT), `test_stdio`. Async tests use anyio's plugin.
+- `tests/`: `conftest.py` (a `FakeCabinet` per test, on free ports), `test_tools` (in-process MCP `Client`,
+  dry run, faults), `test_cli`, `test_assumptions` (registry vs code vs docs), `test_units`, `test_logsafe`,
+  `test_playtracker` (loaded from its file path; `FakeBroker` speaks enough MQTT), `test_stdio`.
+  Async tests use anyio's plugin.
 
 ## Rules for changes
 
@@ -35,9 +41,17 @@ reasoning behind non-obvious changes instead of only making them.
 - playtracker must stay stdlib-only, single-file, and must never raise into EmulationStation (exit 0).
 - Raise `BatoceraError` (a `ToolError`) for anything the model or user can act on. Log to stderr only.
 - Every tool has a `title`, explicit `ToolAnnotations`, and constrained args. `test_tools.py` enforces this.
+- **Actions honor dry run** (`if _dry(): return _result(..., "dry_run")` before anything is sent) and return
+  an `ActionResult` (`cabinet`, `outcome` done/unchanged/dry_run, `detail`, `sent`, `warnings`).
+- **Don't invent Batocera behavior.** Anything not seen on hardware goes in `assumptions.py` (status
+  simulator-only), is cited where the code relies on it (`# ASSUMPTION B-...`), is implemented the same way
+  in `fake_cabinet.py`, gets a test, and gets a step in HARDWARE_VALIDATION.md and a README table row.
+  `tests/test_assumptions.py` fails if these drift.
+- `logsafe.py` is shared: change it in one sibling, copy it to the others.
 
 ## Facts the code depends on
 
+The authoritative list, with ids and status, is `assumptions.py`; this is the readable summary.
 From batocera-emulationstation (`es-app/src/services/HttpServerThread.cpp`, `HttpApi.cpp`,
 `SystemScreenSaver.cpp`, `FileData.cpp`, `es-core/src/Scripting.cpp`) and batocera.linux
 (`python-src/batocera-launch-libretro/.../emulator.py`), read 2026-10. **Not yet verified on hardware.**
@@ -65,5 +79,8 @@ From batocera-emulationstation (`es-app/src/services/HttpServerThread.cpp`, `Htt
 
 ```sh
 pip install -e ".[dev]" && pytest && ruff check . && ruff format --check . && mypy
-mcp-server-batocera check | (serve)
+mcp-server-batocera doctor [--json] | simulate [--write-config DIR] | call <tool> k=v [--dry-run] | (serve [--dry-run])
 ```
+
+Real hardware: `doctor`, then HARDWARE_VALIDATION.md. Record results in `assumptions.py` (status + note)
+and the README table.

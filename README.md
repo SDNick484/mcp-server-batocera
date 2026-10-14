@@ -9,8 +9,9 @@ The repo also includes **playtracker**, a small hook script for the cabinet that
 played to MQTT with Home Assistant discovery. It doesn't log screensaver activity.
 
 > **Status: early / untested on hardware.** Built from Batocera's EmulationStation and RetroArch sources
-> and covered by tests against fakes; the play tracker is also tested against a real Mosquitto broker.
-> Not yet run against a real cabinet.
+> and tested against a wire-level simulator; playtracker is also tested against a real Mosquitto broker.
+> Not yet run against a real cabinet: see [HARDWARE_VALIDATION.md](HARDWARE_VALIDATION.md) and the
+> [verification table](#verification-status).
 
 This is not an official Batocera project.
 
@@ -50,17 +51,12 @@ git clone https://github.com/SDNick484/mcp-server-batocera.git
 cd mcp-server-batocera
 python -m venv .venv && . .venv/bin/activate
 pip install -e .
-BATOCERA_URL=192.168.1.20 mcp-server-batocera check
+BATOCERA_URL=192.168.1.20 mcp-server-batocera doctor
 ```
 
-```
-EmulationStation: http://192.168.1.20:1234
-  version:        43.1
-  systems:        14 with games
-  games:          3120
-  running:        -
-RetroArch:        not answering on UDP 55355 (normal unless a RetroArch game runs)
-```
+`doctor` checks each layer between this machine and the cabinet (TCP, the API, the library, the
+running game, RetroArch), and when one fails, says what it means and which
+[HARDWARE_VALIDATION.md](HARDWARE_VALIDATION.md) step covers it. It changes nothing.
 
 ```json
 { "mcpServers": { "batocera": {
@@ -76,6 +72,26 @@ For Claude Code: `claude mcp add batocera -e BATOCERA_URL=192.168.1.20 -- /path/
 | `BATOCERA_RETROARCH_PORT` | `55355`                                | RetroArch's network command port               |
 | `BATOCERA_TIMEOUT`        | `10`                                   | Seconds to wait for the API (1-60)             |
 | `BATOCERA_CONFIG_DIR`     | `$XDG_CONFIG_HOME/mcp-server-batocera` | Where an optional `config.json` lives (`url`, `retroarch_port`, `timeout_s`) |
+| `BATOCERA_NAME`          | the cabinet's address                  | How results name the cabinet                   |
+| `BATOCERA_DRY_RUN`        | off                                    | Read the cabinet, change nothing (`serve --dry-run`) |
+| `BATOCERA_LOG_UNREDACTED` | off                                    | Show LAN addresses in logs (`--no-redact`); secrets stay hidden |
+| `BATOCERA_DEBUG`          | off                                    | Debug logging (`--debug`)                       |
+
+`config.json` takes `url`, `retroarch_port`, `timeout_s`, `name` and `dry_run`; environment variables win.
+
+### Trying it without the cabinet
+
+```sh
+mcp-server-batocera simulate --write-config /tmp/sim     # a fake cabinet: EmulationStation over HTTP, RetroArch over UDP
+export BATOCERA_CONFIG_DIR=/tmp/sim                      # in another terminal
+mcp-server-batocera doctor
+mcp-server-batocera call find_games query=mario          # one tool call, exactly as the model makes it
+mcp-server-batocera call launch_game system=snes game_id=<id from the result above>
+mcp-server-batocera call --dry-run quit_game             # reports what it would send
+```
+
+The simulator has a small library across a RetroArch system and a standalone one (GameCube), so both
+paths are there to try. The tests use the same simulator.
 
 ## Tools
 
@@ -97,6 +113,17 @@ For Claude Code: `claude mcp add batocera -e BATOCERA_URL=192.168.1.20 -- /path/
 
 Play counts and play time come from EmulationStation itself (it records them in its game lists), so
 "what have we played most?" works without Home Assistant.
+
+Every tool that changes something returns the same structured result as the sibling servers:
+
+```json
+{ "cabinet": "Nick's Arcade", "outcome": "done", "detail": "Launched Galaga (mame).",
+  "sent": ["POST /launch /userdata/roms/mame/galaga.zip"], "warnings": [] }
+```
+
+`outcome` is `done`, `unchanged` (already the case, so nothing was sent) or `dry_run`; `sent` is what
+went to the cabinet, or in a dry run what would have. Failures are MCP error results with a message
+saying what to fix.
 
 ## Safety design
 
@@ -179,6 +206,36 @@ If the broker is unreachable (Home Assistant restarting, say), messages are queu
 and sent with the next event. `/tmp` is cleared on reboot. If the cabinet loses power, `status` stays
 `online` until it next boots, because the script doesn't keep a connection open for an MQTT last will.
 
+## Verification status
+
+Every Batocera behavior the code relies on is listed in `src/batocera_mcp/assumptions.py`, with its
+source and how sure we are; the code cites each id where it depends on it, and
+[HARDWARE_VALIDATION.md](HARDWARE_VALIDATION.md) has the step that confirms it. *high* means read
+directly in the code that implements it; *medium* means read in source but dependent on settings,
+timing or versions; *low* means our own guess. Nothing has been confirmed on hardware yet.
+
+| Assumption | Confidence | Status |
+|---|---|---|
+| `B-ES-PUBLIC-ACCESS` | high | simulator-only |
+| `B-ES-DURING-GAME` | medium | simulator-only |
+| `B-ES-RUNNINGGAME` | high | simulator-only |
+| `B-ES-LAUNCH` | high | simulator-only |
+| `B-ES-EMUKILL` | medium | simulator-only |
+| `B-ES-GAME-ID` | high | simulator-only |
+| `B-ES-METADATA` | high | simulator-only |
+| `B-ES-SYSTEMS` | high | simulator-only |
+| `B-ES-THREADS` | medium | simulator-only |
+| `B-ES-MESSAGES` | medium | simulator-only |
+| `B-RA-ENABLE` | medium | simulator-only |
+| `B-RA-STATUS` | medium | simulator-only |
+| `B-RA-COMMANDS` | medium | simulator-only |
+| `B-PT-SCRIPTS` | high | simulator-only |
+| `B-PT-GAME-ARGS` | high | simulator-only |
+| `B-PT-SCREENSAVER` | high | simulator-only |
+| `B-PT-SCREENSAVER-START` | medium | simulator-only |
+| `B-PT-TMP` | medium | simulator-only |
+| `B-PT-HA-MQTT` | high | simulator-only |
+
 ## Not yet included
 
 - Fixed-command SSH tools (CPU temperature, disk space, restart EmulationStation). These need SSH
@@ -190,7 +247,7 @@ and sent with the next event. `/tmp` is cleared on reboot. If the cabinet loses 
 
 ```sh
 pip install -e ".[dev]"
-pytest              # validators, tools via an in-process MCP client, RetroArch over real UDP, playtracker, stdio
+pytest              # tools via an in-process MCP client against the simulator, faults, CLI, playtracker, stdio
 ruff check . && ruff format --check .
 mypy                # strict, src/ and playtracker/
 ```

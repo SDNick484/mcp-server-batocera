@@ -72,6 +72,7 @@ class System(TypedDict):
     most_played: str | None
 
 
+# ASSUMPTION B-ES-METADATA: metadata values are strings; times look like 20261009T201500.
 def es_time(value: Any) -> str | None:
     """'20261009T201500' -> '2026-10-09T20:15:00'; dates without a time -> '2026-10-09'."""
     if not isinstance(value, str) or len(value) < 8 or not value[:8].isdigit():
@@ -140,6 +141,7 @@ def to_system(raw: dict[str, Any]) -> System:
     )
 
 
+# ASSUMPTION B-ES-SYSTEMS: collections and groups are flagged with the strings "true"/"false".
 def is_game_system(raw: dict[str, Any]) -> bool:
     """Real ROM systems only: not collections (favorites, last played) or groups."""
     return (
@@ -191,7 +193,7 @@ class EmulationStationClient:
             ) from exc
         except httpx.HTTPError as exc:
             raise BatoceraError(f"Talking to EmulationStation at {url} failed: {exc}") from exc
-        if resp.status_code == 403:
+        if resp.status_code == 403:  # ASSUMPTION B-ES-PUBLIC-ACCESS
             raise BatoceraError(
                 "EmulationStation refused the request (403). Turn on public web access: in Batocera's "
                 "Main Menu > System Settings > Developer, enable 'Enable public web access', then reboot."
@@ -215,8 +217,9 @@ class EmulationStationClient:
         return _opt(caps.get("Version")) if isinstance(caps, dict) else None
 
     async def running_game(self) -> dict[str, Any] | None:
+        # ASSUMPTION B-ES-DURING-GAME: this keeps answering while the emulator runs.
         resp = await self.request("GET", "/runningGame")
-        if resp.status_code == 201:  # {"msg":"NO GAME RUNNING"}
+        if resp.status_code == 201:  # ASSUMPTION B-ES-RUNNINGGAME: {"msg":"NO GAME RUNNING"}
             return None
         try:
             data = json.loads(resp.text)
@@ -257,6 +260,7 @@ class EmulationStationClient:
             return games
 
     async def find_game(self, system: str, gid: str) -> dict[str, Any]:
+        # ASSUMPTION B-ES-GAME-ID: ids are md5(path), so they survive a reload; a miss refetches once.
         games = await self.games(system)
         if gid not in games:
             games = await self.games(system, fresh=True)
