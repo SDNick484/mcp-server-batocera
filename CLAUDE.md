@@ -21,7 +21,9 @@ reasoning behind non-obvious changes instead of only making them.
 - `src/batocera_mcp/doctor.py`: layer-by-layer checks; `STEP` maps layers to HARDWARE_VALIDATION.md steps
 - `src/batocera_mcp/sim/fake_cabinet.py`: wire-level fake (ES over real HTTP, RetroArch over real UDP), with
   fault switches; used by the tests and `simulate`
-- `src/batocera_mcp/logsafe.py`: log redaction, **byte-identical** across the sibling servers
+- `src/batocera_mcp/logsafe.py`, `tasks.py`, `ratelimit.py` (and their tests): shared with the sibling
+  servers, synced from `mcp-server-shared` by `scripts/sync_shared.py` at the commit in `shared.lock`.
+  `tasks.py` and `ratelimit.py` aren't used here yet. `remote.py` is excluded: this server is LAN-only.
 - `src/batocera_mcp/cli.py`: `serve` (default), `doctor` (`check`), `simulate`, `call`
 - `playtracker/playtracker.py`: runs **on the cabinet**, stdlib only (no pip on Batocera), single file.
   `Tracker` (pure session logic), a minimal MQTT 3.1.1 QoS 1 publisher, and an outbox for broker outages
@@ -47,7 +49,8 @@ reasoning behind non-obvious changes instead of only making them.
   simulator-only), is cited where the code relies on it (`# ASSUMPTION B-...`), is implemented the same way
   in `fake_cabinet.py`, gets a test, and gets a step in HARDWARE_VALIDATION.md and a README table row.
   `tests/test_assumptions.py` fails if these drift.
-- `logsafe.py` is shared: change it in one sibling, copy it to the others.
+- **Shared files are changed in `mcp-server-shared`, never here**: the `shared-drift` CI job fails on an
+  edited copy. Then `python scripts/sync_shared.py --update` here, and commit the files with `shared.lock`.
 
 ## Facts the code depends on
 

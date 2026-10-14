@@ -1,0 +1,4 @@
+repo = "SDNick484/mcp-server-shared"
+commit = "5856294c7fe44990cc1fd4a51240dc82ccfcada3"
+package = "batocera_mcp"
+exclude = ["remote"]
