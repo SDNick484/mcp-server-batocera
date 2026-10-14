@@ -30,6 +30,25 @@ Home Assistant ◀──MQTT :1883── playtracker.py ◀── EmulationStati
 - **playtracker** runs on the cabinet on every EmulationStation event and publishes to Home Assistant's
   Mosquitto broker. Nothing extra has to run on Batocera; it uses only Python's standard library.
 
+## Local only: stdio, on your LAN
+
+This server is meant to run on your LAN, launched over **stdio** by Claude Code or Claude Desktop on a
+machine that can reach the cabinet. Unlike its AV siblings (Onkyo, Shield TV, Harmony, Sofabaton, webOS),
+it has no HTTP transport and isn't published through a Cloudflare Tunnel, so it isn't reachable from
+claude.ai or the Claude mobile app. That's on purpose:
+
+- **The cabinet's APIs have no authentication.** EmulationStation's web API and RetroArch's network
+  commands trust anything that can reach them. A remotely reachable server that drives them would put
+  launching and quitting games, and save-state loads, behind whatever protects the server, not the cabinet.
+- **It's a single-room device.** Starting a game is only useful to someone standing at the cabinet.
+
+So it takes the code it shares with its siblings from
+[mcp-server-shared](https://github.com/SDNick484/mcp-server-shared) but excludes the `remote` module (the
+Streamable HTTP transport behind Cloudflare Access) in [`shared.lock`](shared.lock). If you ever want remote
+access, that's the place to start: drop the exclusion, add a `serve --http` mode like
+[mcp-server-misterfpga](https://github.com/SDNick484/mcp-server-misterfpga)'s, and put a Cloudflare Access
+application in front of it. Don't expose ports 1234 or 55355 directly.
+
 ## Cabinet setup
 
 1. **Turn on public web access.** By default the API only answers the cabinet itself. Go to *Main Menu >
