@@ -30,6 +30,25 @@ Home Assistant ◀──MQTT :1883── playtracker.py ◀── EmulationStati
 - **playtracker** runs on the cabinet on every EmulationStation event and publishes to Home Assistant's
   Mosquitto broker. Nothing extra has to run on Batocera; it uses only Python's standard library.
 
+## Local only: stdio, on your LAN
+
+This server is meant to run on your LAN, launched over **stdio** by Claude Code or Claude Desktop on a
+machine that can reach the cabinet. Unlike its AV siblings (Onkyo, Shield TV, Harmony, Sofabaton, webOS),
+it has no HTTP transport and isn't published through a Cloudflare Tunnel, so it isn't reachable from
+claude.ai or the Claude mobile app. That's on purpose:
+
+- **The cabinet's APIs have no authentication.** EmulationStation's web API and RetroArch's network
+  commands trust anything that can reach them. A remotely reachable server that drives them would put
+  launching and quitting games, and save-state loads, behind whatever protects the server, not the cabinet.
+- **It's a single-room device.** Starting a game is only useful to someone standing at the cabinet.
+
+So it takes the code it shares with its siblings from
+[mcp-server-shared](https://github.com/SDNick484/mcp-server-shared) but excludes the `remote` module (the
+Streamable HTTP transport behind Cloudflare Access) in [`shared.lock`](shared.lock). If you ever want remote
+access, that's the place to start: drop the exclusion, add a `serve --http` mode like
+[mcp-server-misterfpga](https://github.com/SDNick484/mcp-server-misterfpga)'s, and put a Cloudflare Access
+application in front of it. Don't expose ports 1234 or 55355 directly.
+
 ## Cabinet setup
 
 1. **Turn on public web access.** By default the API only answers the cabinet itself. Go to *Main Menu >
@@ -117,7 +136,7 @@ Play counts and play time come from EmulationStation itself (it records them in 
 Every tool that changes something returns the same structured result as the sibling servers:
 
 ```json
-{ "cabinet": "Nick's Arcade", "outcome": "done", "detail": "Launched Galaga (mame).",
+{ "cabinet": "Game Room", "outcome": "done", "detail": "Launched Galaga (mame).",
   "sent": ["POST /launch /userdata/roms/mame/galaga.zip"], "warnings": [] }
 ```
 
@@ -167,7 +186,8 @@ Two filters on top of that:
                           chmod 600 /userdata/system/configs/playtracker.conf'
    ```
 3. Edit `playtracker.conf` (broker host, user, password, device name), then restart EmulationStation or
-   reboot. The *Nick's Arcade* device appears in Home Assistant under MQTT.
+   reboot. A device named after `DEVICE_NAME` (*Batocera* unless you change it) appears in Home
+   Assistant under MQTT.
 
 Scripts directly in `.../emulationstation/scripts/` get every event, with the event name first. This
 doesn't interfere with Pixelcade's per-event scripts in the subfolders. To debug, read
@@ -175,18 +195,19 @@ doesn't interfere with Pixelcade's per-event scripts in the subfolders. To debug
 
 ### Entities
 
-Home Assistant names the entities after the device, so with `DEVICE_NAME=Nick's Arcade` they come out
-as below (check the device page for the exact IDs).
+Home Assistant names the entities after the device, so with the default `DEVICE_NAME=Batocera` they
+come out as below. Rename the device and they follow: `DEVICE_NAME=Game Room Arcade` gives
+`sensor.game_room_arcade_now_playing`, and so on. Check the device page for the exact IDs.
 
-| Entity                                  | State                     | Attributes                                   |
-| --------------------------------------- | ------------------------- | -------------------------------------------- |
-| `sensor.nick_s_arcade_now_playing`       | game name, or `Idle`      | system, rom, started, source                 |
-| `binary_sensor.nick_s_arcade_playing`    | on while a game runs      |                                              |
-| `sensor.nick_s_arcade_now_playing_system`| system name               |                                              |
-| `sensor.nick_s_arcade_last_session`      | last game played          | system, rom, started, ended, duration_s      |
-| `sensor.nick_s_arcade_last_session_duration` | minutes               |                                              |
-| `event.nick_s_arcade_game_session`       | fires `session_end`       | game, system, started, ended, duration_s     |
-| availability                            | `batocera/<id>/status`    | online/offline (set on start, quit, shutdown, sleep) |
+| Entity                                  | State                  | Attributes                                           |
+| --------------------------------------- | ---------------------- | ---------------------------------------------------- |
+| `sensor.batocera_now_playing`           | game name, or `Idle`   | system, rom, started, source                         |
+| `binary_sensor.batocera_playing`        | on while a game runs   |                                                      |
+| `sensor.batocera_now_playing_system`    | system name            |                                                      |
+| `sensor.batocera_last_session`          | last game played       | system, rom, started, ended, duration_s              |
+| `sensor.batocera_last_session_duration` | minutes                |                                                      |
+| `event.batocera_game_session`           | fires `session_end`    | game, system, started, ended, duration_s             |
+| availability                            | `batocera/<id>/status` | online/offline (set on start, quit, shutdown, sleep) |
 
 Each logged session is one `session_end` event, so it shows up in the logbook, history and automations.
 Daily play time:
@@ -195,7 +216,7 @@ Daily play time:
 sensor:
   - platform: history_stats
     name: Arcade play time today
-    entity_id: binary_sensor.nick_s_arcade_playing
+    entity_id: binary_sensor.batocera_playing
     state: "on"
     type: time
     start: "{{ today_at() }}"

@@ -10,8 +10,11 @@ MQTT_PASSWORD=change-me
 
 # Topics: <TOPIC_PREFIX>/<DEVICE_ID>/now_playing, .../last_session, .../session, .../status
 TOPIC_PREFIX=batocera
-DEVICE_ID=nicks_arcade
-DEVICE_NAME=Nick's Arcade
+# DEVICE_ID goes in topics and unique IDs; it defaults to the cabinet's hostname
+# (usually "batocera"). DEVICE_NAME is what Home Assistant shows, and builds entity IDs
+# from: "Game Room Arcade" gives sensor.game_room_arcade_now_playing.
+#DEVICE_ID=game_room_arcade
+DEVICE_NAME=Batocera
 DISCOVERY_PREFIX=homeassistant
 
 # Sessions shorter than this aren't logged (accidental launches, quick peeks).

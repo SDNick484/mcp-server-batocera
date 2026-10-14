@@ -43,7 +43,7 @@ class Clock:
 @pytest.fixture
 def conf() -> dict[str, str]:
     c = dict(pt.DEFAULTS)
-    c.update(MQTT_HOST="127.0.0.1", DEVICE_ID="nicks_arcade", DEVICE_NAME="Nick's Arcade")
+    c.update(MQTT_HOST="127.0.0.1", DEVICE_ID="game_room", DEVICE_NAME="Game Room Arcade")
     return c
 
 
@@ -73,18 +73,18 @@ def test_first_event_announces_to_home_assistant(conf, tmp_path, clock):
     msgs = pt.Tracker(conf, pt.State(tmp_path), clock).handle("start", [])
     disc = [m for m in msgs if m[0].startswith("homeassistant/")]
     assert {m[0] for m in disc} == {
-        "homeassistant/sensor/nicks_arcade/now_playing/config",
-        "homeassistant/binary_sensor/nicks_arcade/playing/config",
-        "homeassistant/sensor/nicks_arcade/now_playing_system/config",
-        "homeassistant/sensor/nicks_arcade/last_session/config",
-        "homeassistant/sensor/nicks_arcade/last_session_duration/config",
-        "homeassistant/event/nicks_arcade/game_session/config",
+        "homeassistant/sensor/game_room/now_playing/config",
+        "homeassistant/binary_sensor/game_room/playing/config",
+        "homeassistant/sensor/game_room/now_playing_system/config",
+        "homeassistant/sensor/game_room/last_session/config",
+        "homeassistant/sensor/game_room/last_session_duration/config",
+        "homeassistant/event/game_room/game_session/config",
     }
     assert all(retain for _, _, retain in disc)
     assert [p for t, p, _ in msgs if t.endswith("/status")] == ["online"]  # announced once, not twice
     event = json.loads(next(p for t, p, _ in disc if "/event/" in t))
-    assert event["event_types"] == ["session_end"] and event["state_topic"] == "batocera/nicks_arcade/session"
-    assert event["device"]["name"] == "Nick's Arcade"
+    assert event["event_types"] == ["session_end"] and event["state_topic"] == "batocera/game_room/session"
+    assert event["device"]["name"] == "Game Room Arcade"
     # ...and only once per boot
     assert not any(
         t.startswith("homeassistant/") for t, _, _ in pt.Tracker(conf, pt.State(tmp_path), clock).handle("start", [])
@@ -181,12 +181,12 @@ def test_shutdown_closes_the_session_and_goes_offline(tracker, clock):
 
 def test_conf_parsing(tmp_path):
     p = tmp_path / "playtracker.conf"
-    p.write_text('# comment\nMQTT_HOST = 192.168.1.10\nmqtt_password="p@ss=word"\nDEVICE_ID=Nick\'s Arcade!\n')
+    p.write_text('# comment\nMQTT_HOST = 192.168.1.10\nmqtt_password="p@ss=word"\nDEVICE_ID=Game Room\'s Arcade!\n')
     c = pt.load_conf(p)
     assert (c["MQTT_HOST"], c["MQTT_PASSWORD"], c["DEVICE_ID"], c["MIN_SESSION_SECONDS"]) == (
         "192.168.1.10",
         "p@ss=word",
-        "nick_s_arcade_",
+        "game_room_s_arcade_",
         "60",
     )
 
