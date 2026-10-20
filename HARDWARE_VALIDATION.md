@@ -31,7 +31,6 @@ edit this file.
 
 ```sh
 git clone https://github.com/SDNick484/mcp-server-batocera.git && cd mcp-server-batocera
-git checkout hardware-free
 python -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
 pytest -q                          # expect: all passed
@@ -154,9 +153,10 @@ Confirms B-PT-GAME-ARGS.
 
 Confirms B-PT-SCREENSAVER, B-PT-SCREENSAVER-START.
 
-1. Set the screensaver to *random video* with a 1-minute delay, and wait. As videos change, the
-   Pixelcade marquee may follow; Home Assistant's *Now playing* must stay Idle, and the playtracker log
-   must show no `game-start` (B-PT-SCREENSAVER).
+1. Set the screensaver to *random video* with a 1-minute delay, and wait. As videos change, Home
+   Assistant's *Now playing* must stay Idle, and the playtracker log must show no `game-start`
+   (B-PT-SCREENSAVER). If Pixelcade is installed, its marquee runs attract mode instead of following the
+   videos.
 2. With *Screensaver controls* on, press START during a video. The game launches, and with
    `IGNORE_SCREENSAVER_LAUNCHES=yes` nothing reaches Home Assistant. **Record** the order of
    `screensaver-stop` and `game-start` in the log (B-PT-SCREENSAVER-START).

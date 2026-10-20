@@ -16,9 +16,9 @@ Why screensaver activity can't pollute the log
 ----------------------------------------------
 Batocera's screensaver (dim, black, random video, slideshow, suspend) never starts
 a game on its own. The random-video and slideshow screensavers *select* games to
-show their videos, which fires ``game-selected`` (that is what makes a Pixelcade
-marquee follow the screensaver). This tracker only logs ``game-start`` /
-``game-end``, which fire only when a game really launches.
+show their videos, which fires ``game-selected`` (a Pixelcade marquee ignores
+those: Pixelcade's screensaver hook locks it in attract mode). This tracker only
+logs ``game-start`` / ``game-end``, which fire only when a game really launches.
 
 The one way a game launches from the screensaver is a person pressing START on
 the video being shown (Screensaver settings > "Screensaver controls"). This
