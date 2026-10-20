@@ -6,8 +6,8 @@ not in a copy, then sync (`python scripts/sync_shared.py --update`).
 mcp-server-shared is the single source of truth for code the siblings each
 carry a copy of. Its shared.toml lists those files, grouped into modules. Each
 sibling's shared.lock pins the mcp-server-shared commit its copies come from,
-names its package, and can exclude modules it doesn't use (a LAN-only server
-has no use for remote.py):
+names its package, and can exclude modules it doesn't use (a server that only
+speaks stdio has no use for remote.py):
 
     python scripts/sync_shared.py                   write the files as of the locked commit
     python scripts/sync_shared.py --update          move the lock to mcp-server-shared main, then write
