@@ -164,8 +164,9 @@ saying what to fix.
 
 Batocera's screensaver (dim, black, random video, slideshow, suspend) **never starts a game**. The
 random-video and slideshow screensavers *select* games to show their videos, which fires EmulationStation's
-`game-selected` event; that's what makes the Pixelcade marquee follow the screensaver. playtracker only
-logs `game-start`/`game-end`, which fire only when a game actually launches.
+`game-selected` event. (A Pixelcade marquee doesn't follow those: Pixelcade's own screensaver hook locks
+it in attract mode until the screensaver ends.) playtracker only logs `game-start`/`game-end`, which fire
+only when a game actually launches.
 
 Two filters on top of that:
 - **Screensaver launches.** With *Screensaver controls* on, pressing START on a screensaver video
