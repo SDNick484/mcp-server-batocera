@@ -10,8 +10,8 @@ played to MQTT with Home Assistant discovery. It doesn't log screensaver activit
 
 > **Status: early, partly tested on hardware.** Built from Batocera's EmulationStation and RetroArch sources
 > and tested against a wire-level simulator; playtracker is also tested against a real Mosquitto broker.
-> On a real cabinet (Batocera 43), `doctor` and browsing the library work; launching, messages, RetroArch
-> and playtracker aren't confirmed yet. See [HARDWARE_VALIDATION.md](HARDWARE_VALIDATION.md) and the
+> On a real cabinet (Batocera 43), every MCP tool has been checked: `doctor`, the library, launching and
+> quitting, messages, RetroArch and dry run. playtracker isn't confirmed on hardware yet. See [HARDWARE_VALIDATION.md](HARDWARE_VALIDATION.md) and the
 > [verification table](#verification-status).
 
 This is not an official Batocera project.

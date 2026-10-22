@@ -1,6 +1,6 @@
 # Hardware validation (Batocera cabinet)
 
-Steps 1 to 5 have run on a real cabinet (Batocera 43, 2026-10-21); the rest haven't yet. The server was built from Batocera's
+Steps 1 to 6 have run on a real cabinet (Batocera 43, 2026-10-21); the rest haven't yet. The server was built from Batocera's
 EmulationStation and RetroArch sources and tested against a wire-level simulator
 (`src/batocera_mcp/sim/fake_cabinet.py`: real HTTP, real UDP). playtracker was also tested against a
 real Mosquitto broker. Each step below depends only on the ones before it and names the assumptions it
@@ -18,7 +18,7 @@ edit this file.
 | `launch_game` (confirmed via /runningGame), `quit_game` | verified on hardware | 3 |
 | `show_message` (frontend notification, popup, over a RetroArch game) | verified on hardware | 4 |
 | RetroArch tools: pause, save/load state, screenshot, reset | verified on hardware | 5 |
-| Dry run and ActionResult | verified against simulator only | 6 |
+| Dry run and ActionResult | verified on hardware | 6 |
 | playtracker install, Home Assistant discovery | verified against simulator only | 7 |
 | playtracker sessions and the short-session filter | verified against simulator only | 8 |
 | playtracker ignores screensaver activity | verified against simulator only | 9 |
