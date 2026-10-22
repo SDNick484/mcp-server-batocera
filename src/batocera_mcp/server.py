@@ -401,7 +401,8 @@ async def show_message(
             if _dry():
                 return _result("show the message over the running game", sent, "dry_run")
             await ra().show_message(one_line)
-            return _result("Shown over the running game.", sent)
+            # ASSUMPTION B-RA-COMMANDS: on hardware, RetroArch shows it briefly, small, bottom-left.
+            return _result("Shown over the running game (small, bottom-left, for a few seconds).", sent)
         # ASSUMPTION B-ES-MESSAGES: frontend notifications aren't visible over a running emulator.
         raise BatoceraError(
             "A game is running in an emulator that can't show messages (or RetroArch network commands are off), "

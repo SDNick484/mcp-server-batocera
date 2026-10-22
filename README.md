@@ -283,9 +283,9 @@ timing or versions; *low* means our own guess. Hardware results so far are from 
 | `B-ES-SYSTEMS` | high | hardware-verified |
 | `B-ES-THREADS` | medium | simulator-only |
 | `B-ES-MESSAGES` | medium | hardware-verified |
-| `B-RA-ENABLE` | medium | simulator-only |
-| `B-RA-STATUS` | medium | simulator-only |
-| `B-RA-COMMANDS` | medium | simulator-only |
+| `B-RA-ENABLE` | medium | hardware-verified |
+| `B-RA-STATUS` | medium | hardware-verified |
+| `B-RA-COMMANDS` | medium | hardware-verified |
 | `B-PT-SCRIPTS` | high | simulator-only |
 | `B-PT-GAME-ARGS` | high | simulator-only |
 | `B-PT-SCREENSAVER` | high | simulator-only |

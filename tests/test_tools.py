@@ -287,7 +287,10 @@ async def test_open_popup_holds_back_a_launch(mcp_client, cabinet):
 async def test_message_over_a_retroarch_game(mcp_client, cabinet):
     cabinet.play("snes")
     r = await act(mcp_client, "show_message", text="Dinner in   5!")
-    assert (r["detail"], r["sent"]) == ("Shown over the running game.", ["UDP SHOW_MSG Dinner in 5!"])
+    assert (r["detail"], r["sent"]) == (
+        "Shown over the running game (small, bottom-left, for a few seconds).",
+        ["UDP SHOW_MSG Dinner in 5!"],
+    )
     assert await ra_received(cabinet, 1) == ["SHOW_MSG Dinner in 5!"]
     assert cabinet.notifications == []
 

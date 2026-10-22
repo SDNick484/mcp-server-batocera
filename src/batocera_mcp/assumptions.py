@@ -156,7 +156,10 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "from the next game launch.",
         "batocera.linux python-src/batocera-launch-libretro emulator.py (retroarch.* keys copied to the config)",
         "medium",
-        note="The pass-through is read in source; that RetroArch then binds the LAN interface is not checked.",
+        status="hardware-verified",
+        note=SEEN + "with the line in batocera.conf, Batocera wrote network_cmd_enable = true and network_cmd_port = "
+        '"55355" into retroarchcustom.cfg, and RetroArch 1.22.2 answered from the LAN. The line was already there '
+        "(set before testing); RetroArch's own default is off.",
     ),
     Assumption(
         "B-RA-STATUS",
@@ -164,7 +167,10 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "other commands don't answer, and nothing answers while a standalone emulator runs.",
         "RetroArch command.c",
         "medium",
-        note="From RetroArch's source; the system/game fields' exact contents on Batocera aren't seen yet.",
+        status="hardware-verified",
+        note=SEEN + "\"GET_STATUS PLAYING super_nes,Super Mario World 2 - Yoshi's Island (USA) (Rev 1),"
+        "crc32=cf98ddaa\\n\", and PAUSED while paused. The system is RetroArch's name (super_nes), not Batocera's "
+        "(snes); the game is the ROM file name.",
     ),
     Assumption(
         "B-RA-COMMANDS",
@@ -172,7 +178,10 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "SHOW_MSG <text> do what their names say.",
         "RetroArch command.h",
         "medium",
-        note="Standard RetroArch commands; the screenshot folder is Batocera's default, not checked.",
+        status="hardware-verified",
+        note=SEEN + "all six on RetroArch 1.22.2 (snes9x): pause and resume, save and load (jumped back), a "
+        "screenshot named '<ROM>-261021-233238.png' in /userdata/screenshots, reset to the title screen, and "
+        "SHOW_MSG as small text in the bottom-left corner for a few seconds (easy to miss).",
     ),
     # --- playtracker (EmulationStation event scripts) -----------------------------------------
     Assumption(
