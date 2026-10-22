@@ -65,7 +65,9 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "the emulator process).",
         f"{HTTP}; {ES} es-app/src/FileData.cpp launchGame()",
         "medium",
-        note="Follows from the threading, but some emulators or a low-memory board could stall it.",
+        status="hardware-verified",
+        note=SEEN + "/runningGame and /isIdle answered while a SNES (RetroArch) game ran. Not yet seen during a "
+        "standalone emulator.",
     ),
     Assumption(
         "B-ES-RUNNINGGAME",
@@ -73,7 +75,9 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "/isIdle answers 200 [ true ] or 201 [ false ].",
         HTTP,
         "high",
-        note="Read in source; status codes not yet seen on the wire.",
+        status="hardware-verified",
+        note=SEEN + 'idle: /runningGame 201 {"msg":"NO GAME RUNNING"}, /isIdle 200 [ true ]; during a game: '
+        "/runningGame 200, /isIdle 201 [ false ].",
     ),
     Assumption(
         "B-ES-LAUNCH",
@@ -81,15 +85,17 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "cancels the screensaver, and starts the game a moment later on the UI thread.",
         f"{HTTP} /launch",
         "high",
-        note="Read in source. How long until /runningGame shows the game is a guess (the server waits 20 s).",
+        note="Read in source. On hardware (2026-10-21): a SNES path with spaces, an apostrophe and parentheses "
+        "launched, and launch_game saw it in /runningGame within 2.4 s. Not yet seen: the 200 for an unknown path.",
     ),
     Assumption(
         "B-ES-EMUKILL",
         "GET /emukill stops the running emulator; /runningGame goes back to 201 within a few seconds.",
         f"{HTTP}; {ES} ApiSystem::emuKill()",
         "medium",
-        note="emuKill kills the emulator process; standalone emulators (Dolphin, PCSX2) not checked. "
-        "The server waits 10 s.",
+        note="emuKill kills the emulator process. The server waits 10 s. On hardware (2026-10-21): quit_game on a "
+        "SNES (RetroArch) game was confirmed in 7.9 s, close to that limit. Standalone emulators (Dolphin, PCSX2) "
+        "not checked yet.",
     ),
     Assumption(
         "B-ES-GAME-ID",
