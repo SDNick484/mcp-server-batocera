@@ -112,6 +112,40 @@ mcp-server-batocera call --dry-run quit_game             # reports what it would
 The simulator has a small library across a RetroArch system and a standalone one (GameCube), so both
 paths are there to try. The tests use the same simulator.
 
+### On Alpine (e.g. a Proxmox LXC)
+
+`deploy/alpine/` installs it to run from the command line on an always-on Alpine machine on the
+cabinet's LAN: a venv in `/opt/mcp-server-batocera`, a `mcp-batocera` system user, every setting in
+`/etc/mcp-server-batocera/env`, and `mcp-server-batocera` on `PATH`, which runs as that user with those
+settings. Nothing listens on a port, which keeps it [local only](#local-only-stdio-on-your-lan): you
+run `doctor` and `call` over SSH. The layout matches the sibling servers' `deploy/alpine/`, so an OpenRC
+service could be added later without moving anything.
+
+```sh
+git clone https://github.com/SDNick484/mcp-server-batocera.git && cd mcp-server-batocera
+sh deploy/alpine/install.sh                                # as root; re-run to upgrade
+vim /etc/mcp-server-batocera/env                           # BATOCERA_URL=<the cabinet's IP>
+mcp-server-batocera doctor
+mcp-server-batocera call find_games query=mario
+```
+
+A variable set in your shell beats the env file, so one-off overrides work as usual
+(`BATOCERA_DRY_RUN=1 mcp-server-batocera call ...`).
+
+**Both arcade servers at once.** `deploy/alpine/setup-arcade.sh` installs this server and
+[mcp-server-pixelcade](https://github.com/SDNick484/mcp-server-pixelcade) from GitHub into
+`/srv/src/`, points both at the cabinet, and runs both doctors. Run it as root on the Alpine machine,
+or from elsewhere through the Proxmox host:
+
+```sh
+ssh root@<proxmox host> "pct exec <container id> -- env ARCADE_HOST=<cabinet IP> sh -s" < deploy/alpine/setup-arcade.sh
+```
+
+`ARCADE_REF` picks a branch, tag or commit (default `main`); re-running updates the code and keeps
+the settings. CI runs `deploy/alpine/smoke-test.sh` in a stock `python:3.12-alpine` container: install,
+upgrade, the test suite on musl, `doctor` and `call` through the command on `PATH` against the
+simulator, and `setup-arcade.sh` itself.
+
 ## Tools
 
 | Tool              | What it does                                                                                  |
