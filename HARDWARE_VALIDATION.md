@@ -1,6 +1,6 @@
 # Hardware validation (Batocera cabinet)
 
-Nothing in this repo has run against a real cabinet yet. The server was built from Batocera's
+Steps 1 and 2 have run on a real cabinet (Batocera 43, 2026-10-21); the rest haven't yet. The server was built from Batocera's
 EmulationStation and RetroArch sources and tested against a wire-level simulator
 (`src/batocera_mcp/sim/fake_cabinet.py`: real HTTP, real UDP). playtracker was also tested against a
 real Mosquitto broker. Each step below depends only on the ones before it and names the assumptions it
@@ -13,8 +13,8 @@ edit this file.
 
 | Feature | Status | Step |
 | --- | --- | --- |
-| `doctor` (TCP, API, library, running game, RetroArch) | verified against simulator only | 1 |
-| `list_systems`, `find_games`, `get_game` | verified against simulator only | 2 |
+| `doctor` (TCP, API, library, running game, RetroArch) | verified on hardware (RetroArch layer not yet) | 1 |
+| `list_systems`, `find_games`, `get_game` | verified on hardware | 2 |
 | `launch_game` (confirmed via /runningGame), `quit_game` | verified against simulator only | 3 |
 | `show_message` (frontend notification, popup, over a RetroArch game) | verified against simulator only | 4 |
 | RetroArch tools: pause, save/load state, screenshot, reset | verified against simulator only | 5 |
@@ -22,7 +22,7 @@ edit this file.
 | playtracker install, Home Assistant discovery | verified against simulator only | 7 |
 | playtracker sessions and the short-session filter | verified against simulator only | 8 |
 | playtracker ignores screensaver activity | verified against simulator only | 9 |
-| Log redaction (shared logsafe.py) | verified against simulator only | 1 |
+| Log redaction (shared logsafe.py) | verified on hardware | 1 |
 
 ## Before you start
 

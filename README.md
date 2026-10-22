@@ -8,9 +8,10 @@ screenshots and reset.
 The repo also includes **playtracker**, a small hook script for the cabinet that publishes what's being
 played to MQTT with Home Assistant discovery. It doesn't log screensaver activity.
 
-> **Status: early / untested on hardware.** Built from Batocera's EmulationStation and RetroArch sources
+> **Status: early, partly tested on hardware.** Built from Batocera's EmulationStation and RetroArch sources
 > and tested against a wire-level simulator; playtracker is also tested against a real Mosquitto broker.
-> Not yet run against a real cabinet: see [HARDWARE_VALIDATION.md](HARDWARE_VALIDATION.md) and the
+> On a real cabinet (Batocera 43), `doctor` and browsing the library work; launching, messages, RetroArch
+> and playtracker aren't confirmed yet. See [HARDWARE_VALIDATION.md](HARDWARE_VALIDATION.md) and the
 > [verification table](#verification-status).
 
 This is not an official Batocera project.
@@ -268,18 +269,18 @@ Every Batocera behavior the code relies on is listed in `src/batocera_mcp/assump
 source and how sure we are; the code cites each id where it depends on it, and
 [HARDWARE_VALIDATION.md](HARDWARE_VALIDATION.md) has the step that confirms it. *high* means read
 directly in the code that implements it; *medium* means read in source but dependent on settings,
-timing or versions; *low* means our own guess. Nothing has been confirmed on hardware yet.
+timing or versions; *low* means our own guess. Hardware results so far are from Batocera 43 (2026-10-21).
 
 | Assumption | Confidence | Status |
 |---|---|---|
-| `B-ES-PUBLIC-ACCESS` | high | simulator-only |
+| `B-ES-PUBLIC-ACCESS` | high | hardware-verified |
 | `B-ES-DURING-GAME` | medium | simulator-only |
 | `B-ES-RUNNINGGAME` | high | simulator-only |
 | `B-ES-LAUNCH` | high | simulator-only |
 | `B-ES-EMUKILL` | medium | simulator-only |
-| `B-ES-GAME-ID` | high | simulator-only |
-| `B-ES-METADATA` | high | simulator-only |
-| `B-ES-SYSTEMS` | high | simulator-only |
+| `B-ES-GAME-ID` | high | hardware-verified |
+| `B-ES-METADATA` | high | hardware-verified |
+| `B-ES-SYSTEMS` | high | hardware-verified |
 | `B-ES-THREADS` | medium | simulator-only |
 | `B-ES-MESSAGES` | medium | simulator-only |
 | `B-RA-ENABLE` | medium | simulator-only |

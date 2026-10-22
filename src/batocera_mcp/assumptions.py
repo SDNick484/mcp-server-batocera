@@ -32,6 +32,8 @@ Status = Literal["simulator-only", "hardware-verified", "hardware-contradicted"]
 ES = "batocera-emulationstation"
 HTTP = f"{ES} es-app/src/services/HttpServerThread.cpp"
 
+SEEN = "Seen 2026-10-21 on Batocera 43 (ES 43couv.1) from a Proxmox LXC: "
+
 
 @dataclass(frozen=True)
 class Assumption:
@@ -47,11 +49,15 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
     # --- EmulationStation web API ---------------------------------------------------------
     Assumption(
         "B-ES-PUBLIC-ACCESS",
-        "Requests from other hosts get 403 unless 'Enable public web access' is on; with it (after a reboot), "
-        "EmulationStation listens on 0.0.0.0:1234.",
+        "Unless 'Enable public web access' is on, EmulationStation listens on 127.0.0.1 only, so other hosts' "
+        "connections are refused (its 403 for non-local clients is a second guard they can't reach); with it on "
+        "(after a reboot), it listens on 0.0.0.0:1234.",
         f"{HTTP} isAllowed() and listen()",
         "high",
-        note="Read in source. Whether the setting needs a reboot or only an ES restart isn't confirmed.",
+        status="hardware-verified",
+        note=SEEN + "connection refused with the setting off; doctor all ok after turning it on and rebooting. "
+        "The claim used to say other hosts get 403; they get a refused connection. Not yet known: whether "
+        "the reboot is needed.",
     ),
     Assumption(
         "B-ES-DURING-GAME",
@@ -90,7 +96,8 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "A game's id is the md5 hex of its path, stable across reloads.",
         f"{ES} es-app/src/services/HttpApi.cpp getFileDataId()",
         "high",
-        note="Read in source.",
+        status="hardware-verified",
+        note=SEEN + "id == md5(path) for all 512 mame games, and an id still found its game after reload_games.",
     ),
     Assumption(
         "B-ES-METADATA",
@@ -98,7 +105,10 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         'releasedate as 20261009T201500, favorite as "true"; EmulationStation records play count and time itself.',
         f"{ES} es-app/src/MetaData.cpp, HttpApi.cpp getFileDataJson()",
         "high",
-        note="Read in source; the time format is from gamelist.xml conventions, not seen in an API reply.",
+        status="hardware-verified",
+        note=SEEN + "playcount '2', gametime '210', lastplayed '20250629T112833', releasedate '19860101T000000', "
+        "favorite 'false', all strings. Some gametime totals run to hundreds of hours: ES counts time a game "
+        "is left running.",
     ),
     Assumption(
         "B-ES-SYSTEMS",
@@ -106,14 +116,17 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         '"collection", "gamesystem" and "groupsystem" as the strings "true"/"false".',
         f"{ES} HttpApi.cpp getSystemDataJson()",
         "high",
-        note="Read in source.",
+        status="hardware-verified",
+        note=SEEN + "collection 'true' on custom collections, 'all' and 'favorites'; groupsystem 'true' on ports; "
+        "member systems carry a 'group' string. list_systems showed 32 real systems.",
     ),
     Assumption(
         "B-ES-THREADS",
         "The HTTP server runs a 2-thread pool, so the server loads at most 2 game lists at a time.",
         f"{HTTP} new_task_queue",
         "medium",
-        note="A courtesy limit: more parallel requests would queue, not fail.",
+        note="A courtesy limit: more parallel requests would queue, not fail. Not observable directly; on hardware, "
+        "find_games across 32 systems (3,000+ games, cold cache) took about 1 s.",
     ),
     Assumption(
         "B-ES-MESSAGES",
