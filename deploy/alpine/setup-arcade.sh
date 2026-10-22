@@ -47,7 +47,14 @@ for s in $SERVERS; do
 		git clone -q "$GIT/mcp-server-$s.git" "$dir"
 	fi
 	# A branch name means the remote's copy of it; anything else (a tag, a commit) is used as given.
-	git -C "$dir" checkout -q --detach "origin/$REF" 2>/dev/null || git -C "$dir" checkout -q --detach "$REF"
+	if git -C "$dir" rev-parse -q --verify "origin/$REF^{commit}" >/dev/null; then
+		git -C "$dir" checkout -q --detach "origin/$REF"
+	elif git -C "$dir" rev-parse -q --verify "$REF^{commit}" >/dev/null; then
+		git -C "$dir" checkout -q --detach "$REF"
+	else
+		echo "mcp-server-$s has no branch, tag or commit '$REF' (ARCADE_REF)." >&2
+		exit 1
+	fi
 	say "mcp-server-$s at $(git -C "$dir" log -1 --format='%h %s')"
 	sh "$dir/deploy/alpine/install.sh" "$dir"
 	if [ -n "$HOST" ]; then
