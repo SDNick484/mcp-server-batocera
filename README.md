@@ -152,7 +152,7 @@ simulator, and `setup-arcade.sh` itself.
 | Tool              | What it does                                                                                  |
 | ----------------- | --------------------------------------------------------------------------------------------- |
 | `get_status`      | Reachable, EmulationStation version, the running game, busy (scraping/updating), RetroArch state |
-| `list_systems`    | Systems with games: counts, played, favorites, most played                                    |
+| `list_systems`    | Systems with games (not collections or the picture viewer): counts, played, favorites, most played |
 | `find_games`      | Search by name (punctuation-insensitive), or list favorites / most played / most time / recent |
 | `get_game`        | Description, developer, publisher, rating, players, play count and time                        |
 | `launch_game`     | Start a game by system + id; refuses while another game runs; confirms it started             |

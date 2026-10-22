@@ -208,6 +208,9 @@ class FakeCabinet:
                     "gamesystem": "true", "groupsystem": "false", "totalGames": 1})  # fmt: skip
         out.append({"name": "n64", "fullname": "Nintendo 64", "visible": "true", "collection": "false",
                     "gamesystem": "true", "groupsystem": "false", "totalGames": 0})  # fmt: skip
+        # ASSUMPTION B-ES-SYSTEMS: on hardware, Batocera's picture viewer is flagged as a game system too.
+        out.append({"name": "imageviewer", "fullname": "Image viewer", "visible": "true", "collection": "false",
+                    "gamesystem": "true", "groupsystem": "false", "totalGames": 2})  # fmt: skip
         return out
 
     def _launch(self, path: str) -> None:

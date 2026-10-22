@@ -118,7 +118,8 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "high",
         status="hardware-verified",
         note=SEEN + "collection 'true' on custom collections, 'all' and 'favorites'; groupsystem 'true' on ports; "
-        "member systems carry a 'group' string. list_systems showed 32 real systems.",
+        "member systems carry a 'group' string. imageviewer (the picture viewer) is flagged gamesystem 'true' "
+        "too, so the server hides it by name (config.NON_GAME_SYSTEMS).",
     ),
     Assumption(
         "B-ES-THREADS",

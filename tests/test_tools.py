@@ -161,6 +161,21 @@ async def test_find_games_relevance_order(mcp_client):
     assert [g["name"] for g in r["games"]] == ["Super Mario World", "Super Metroid", "Super Smash Bros. Melee"]
 
 
+@pytest.mark.parametrize(
+    ("tool", "args"),
+    [
+        ("find_games", {"system": "imageviewer"}),
+        ("get_game", {"system": "ImageViewer", "game_id": "0" * 32}),
+        ("launch_game", {"system": "imageviewer", "game_id": "0" * 32}),
+    ],
+)
+async def test_picture_viewer_is_not_a_game_system(mcp_client, cabinet, tool, args):
+    # ASSUMPTION B-ES-SYSTEMS: imageviewer is flagged gamesystem "true", but holds pictures.
+    r = await call(mcp_client, tool, **args)
+    assert r.is_error and "picture viewer, not a game system" in text(r)
+    assert cabinet.calls("/systems/imageviewer/games") == []
+
+
 async def test_most_played_across_systems(mcp_client):
     r = (await call(mcp_client, "find_games", sort="most_played", limit=2)).structured_content
     assert [g["name"] for g in r["games"]] == ["Pac-Man (Midway)", "Super Mario World"]
