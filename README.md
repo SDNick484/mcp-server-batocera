@@ -282,7 +282,7 @@ timing or versions; *low* means our own guess. Hardware results so far are from 
 | `B-ES-METADATA` | high | hardware-verified |
 | `B-ES-SYSTEMS` | high | hardware-verified |
 | `B-ES-THREADS` | medium | simulator-only |
-| `B-ES-MESSAGES` | medium | simulator-only |
+| `B-ES-MESSAGES` | medium | hardware-verified |
 | `B-RA-ENABLE` | medium | simulator-only |
 | `B-RA-STATUS` | medium | simulator-only |
 | `B-RA-COMMANDS` | medium | simulator-only |

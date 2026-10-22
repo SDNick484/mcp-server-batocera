@@ -269,6 +269,21 @@ async def test_message_in_frontend(mcp_client, cabinet):
     assert (cabinet.notifications, cabinet.popups) == (["Dinner in 5!"], ["Bedtime"])
 
 
+async def test_open_popup_holds_back_a_launch(mcp_client, cabinet):
+    # ASSUMPTION B-ES-LAUNCH: seen on hardware, a launch waited until the popup was dismissed.
+    r = await act(mcp_client, "show_message", text="Bedtime", style="popup")
+    assert r["warnings"] and "holds back launch_game" in r["warnings"][0]
+    g = cabinet.game("snes")
+    r = await call(mcp_client, "launch_game", system="snes", game_id=g["id"])
+    assert r.is_error and "A popup" in text(r) and cabinet.running is None
+    cabinet.dismiss()
+    for _ in range(50):
+        if cabinet.running is not None:
+            break
+        await asyncio.sleep(0.02)
+    assert cabinet.running is not None and cabinet.running["id"] == g["id"]
+
+
 async def test_message_over_a_retroarch_game(mcp_client, cabinet):
     cabinet.play("snes")
     r = await act(mcp_client, "show_message", text="Dinner in   5!")

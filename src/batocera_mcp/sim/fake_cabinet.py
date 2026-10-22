@@ -8,6 +8,7 @@ server depends on, each behavior tagged with the assumption it stands for
   - ``/runningGame`` answers 201 when nothing runs (B-ES-RUNNINGGAME)
   - ``/launch`` answers 200 for any body; the game starts a moment later, on
     EmulationStation's UI thread, and an unknown path starts nothing (B-ES-LAUNCH)
+  - ``/messagebox`` opens a popup that holds launches until ``dismiss()`` (B-ES-LAUNCH)
   - ``/emukill`` stops the game a moment later (B-ES-EMUKILL)
   - the API keeps answering while a game runs (B-ES-DURING-GAME)
   - game ids are md5 of the path; metadata values are strings (B-ES-GAME-ID, B-ES-METADATA)
@@ -130,6 +131,8 @@ class FakeCabinet:
         self.ra_received: list[str] = []
         self.notifications: list[str] = []
         self.popups: list[str] = []
+        self.popup_open = False  # a /messagebox dialog waiting for a button press
+        self._held_launch: str | None = None  # a /launch the open popup is holding back
         self.reloads = 0
         self._lock = threading.RLock()
         self._http = _QuietHTTPServer((host, es_port), self._handler())
@@ -213,9 +216,22 @@ class FakeCabinet:
                     "gamesystem": "true", "groupsystem": "false", "totalGames": 2})  # fmt: skip
         return out
 
+    def dismiss(self) -> None:
+        """Someone presses a button on the open popup; a launch it held back now goes ahead."""
+        with self._lock:
+            self.popup_open = False
+            held, self._held_launch = self._held_launch, None
+        if held is not None:
+            self._launch(held)
+
     def _launch(self, path: str) -> None:
         if self.launch_fails:
             return
+        # ASSUMPTION B-ES-LAUNCH: launches run on the UI thread, which an open popup holds.
+        with self._lock:
+            if self.popup_open:
+                self._held_launch = path
+                return
         for games in self.library.values():
             for g in games:
                 if g["path"] == path:
@@ -275,6 +291,8 @@ class FakeCabinet:
             if not body:
                 return 400, "text/html", "400 bad request - body is missing"
             (self.notifications if path == "/notify" else self.popups).append(body)
+            if path == "/messagebox":
+                self.popup_open = True
             return 200, "text/plain", ""
         if method == "GET" and path == "/reloadgames":
             self.reloads += 1

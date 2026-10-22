@@ -1,6 +1,6 @@
 # Hardware validation (Batocera cabinet)
 
-Steps 1 to 3 have run on a real cabinet (Batocera 43, 2026-10-21); the rest haven't yet. The server was built from Batocera's
+Steps 1 to 4 have run on a real cabinet (Batocera 43, 2026-10-21); the rest haven't yet. The server was built from Batocera's
 EmulationStation and RetroArch sources and tested against a wire-level simulator
 (`src/batocera_mcp/sim/fake_cabinet.py`: real HTTP, real UDP). playtracker was also tested against a
 real Mosquitto broker. Each step below depends only on the ones before it and names the assumptions it
@@ -16,7 +16,7 @@ edit this file.
 | `doctor` (TCP, API, library, running game, RetroArch) | verified on hardware (RetroArch layer not yet) | 1 |
 | `list_systems`, `find_games`, `get_game` | verified on hardware | 2 |
 | `launch_game` (confirmed via /runningGame), `quit_game` | verified on hardware | 3 |
-| `show_message` (frontend notification, popup, over a RetroArch game) | verified against simulator only | 4 |
+| `show_message` (frontend notification, popup, over a RetroArch game) | verified on hardware (over RetroArch: step 5) | 4 |
 | RetroArch tools: pause, save/load state, screenshot, reset | verified against simulator only | 5 |
 | Dry run and ActionResult | verified against simulator only | 6 |
 | playtracker install, Home Assistant discovery | verified against simulator only | 7 |
@@ -100,7 +100,8 @@ Confirms B-ES-MESSAGES.
 
 1. In the frontend: `call show_message text="Hello from Claude"`. **Record** what the notification looks
    like and how long it stays.
-2. `call show_message text="Popup test" style=popup`. Expect a dialog that waits for a button.
+2. `call show_message text="Popup test" style=popup`. Expect a dialog that waits for a button. While
+   it's open, a launch waits for it (B-ES-LAUNCH): dismiss it before step 4.3.
 3. While a standalone-emulator game runs (if you have one): `call show_message text=hi`. Expect a
    refusal. Optionally `curl -X POST --data hi http://192.168.1.20:1234/notify` and **record** whether
    anything shows over the game.

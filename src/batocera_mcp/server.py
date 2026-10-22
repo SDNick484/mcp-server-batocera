@@ -351,7 +351,8 @@ async def launch_game(system: SystemArg, game_id: GameIdArg) -> ActionResult:
         raise BatoceraError(f"Something else started instead: {other.get('name')}.")
     raise BatoceraError(
         f"EmulationStation accepted the request but {name} didn't start within {LAUNCH_TIMEOUT_S:g}s. "
-        "A dialog or menu may be open on the cabinet, or the emulator failed to start (check the screen)."
+        "A popup (show_message style=popup), dialog or menu may be open on the cabinet: the game starts once "
+        "someone closes it. Otherwise the emulator failed to start (check the screen)."
     )
 
 
@@ -411,7 +412,11 @@ async def show_message(
     if _dry():
         return _result(f"show the message as a {'popup' if popup else 'notification'}", sent, "dry_run")
     await c.notify(t, popup=popup)
-    return _result("Shown as a popup." if popup else "Shown as a notification.", sent)
+    result = _result("Shown as a popup." if popup else "Shown as a notification.", sent)
+    if popup:
+        # ASSUMPTION B-ES-LAUNCH: an open popup holds launches until someone presses a button.
+        result["warnings"].append("Until someone presses a button on the cabinet, the popup holds back launch_game.")
+    return result
 
 
 @mcp.tool(title="Rescan game lists", annotations=_SET)

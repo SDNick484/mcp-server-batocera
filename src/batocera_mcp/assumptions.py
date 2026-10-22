@@ -82,12 +82,14 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
     Assumption(
         "B-ES-LAUNCH",
         "POST /launch takes the ROM path as the raw body, answers 200 whether or not the path is a known game, "
-        "cancels the screensaver, and starts the game a moment later on the UI thread.",
+        "cancels the screensaver, and starts the game a moment later on the UI thread, which an open popup "
+        "(/messagebox) holds until someone dismisses it.",
         f"{HTTP} /launch",
         "high",
         status="hardware-verified",
         note=SEEN + "SNES and GameCube paths with spaces, commas, '&', an apostrophe and parentheses launched, "
-        "confirmed in /runningGame within 2.4 s; POST /launch of a missing path answered 200 and nothing started.",
+        "confirmed in /runningGame within 2.4 s; POST /launch of a missing path answered 200 and nothing started. "
+        "With a show_message popup open, a launch waited until the popup was dismissed (launch_game timed out).",
     ),
     Assumption(
         "B-ES-EMUKILL",
@@ -143,7 +145,9 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "until someone presses a button. Neither is visible over a running emulator.",
         HTTP,
         "medium",
-        note="Endpoints read in source; what they look like on screen, and over a game, not checked.",
+        status="hardware-verified",
+        note=SEEN + "a notification showed in the frontend; a popup stayed until a button was pressed; /notify "
+        "during a Dolphin game answered 200 but nothing appeared, then or later.",
     ),
     # --- RetroArch ----------------------------------------------------------------------
     Assumption(
