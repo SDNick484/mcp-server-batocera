@@ -276,8 +276,8 @@ timing or versions; *low* means our own guess. Hardware results so far are from 
 | `B-ES-PUBLIC-ACCESS` | high | hardware-verified |
 | `B-ES-DURING-GAME` | medium | hardware-verified |
 | `B-ES-RUNNINGGAME` | high | hardware-verified |
-| `B-ES-LAUNCH` | high | simulator-only |
-| `B-ES-EMUKILL` | medium | simulator-only |
+| `B-ES-LAUNCH` | high | hardware-verified |
+| `B-ES-EMUKILL` | medium | hardware-verified |
 | `B-ES-GAME-ID` | high | hardware-verified |
 | `B-ES-METADATA` | high | hardware-verified |
 | `B-ES-SYSTEMS` | high | hardware-verified |

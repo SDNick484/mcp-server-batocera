@@ -66,8 +66,8 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         f"{HTTP}; {ES} es-app/src/FileData.cpp launchGame()",
         "medium",
         status="hardware-verified",
-        note=SEEN + "/runningGame and /isIdle answered while a SNES (RetroArch) game ran. Not yet seen during a "
-        "standalone emulator.",
+        note=SEEN + "/runningGame and /isIdle answered while a SNES (RetroArch) game ran, and get_status "
+        "worked during a GameCube game in Dolphin.",
     ),
     Assumption(
         "B-ES-RUNNINGGAME",
@@ -85,17 +85,18 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "cancels the screensaver, and starts the game a moment later on the UI thread.",
         f"{HTTP} /launch",
         "high",
-        note="Read in source. On hardware (2026-10-21): a SNES path with spaces, an apostrophe and parentheses "
-        "launched, and launch_game saw it in /runningGame within 2.4 s. Not yet seen: the 200 for an unknown path.",
+        status="hardware-verified",
+        note=SEEN + "SNES and GameCube paths with spaces, commas, '&', an apostrophe and parentheses launched, "
+        "confirmed in /runningGame within 2.4 s; POST /launch of a missing path answered 200 and nothing started.",
     ),
     Assumption(
         "B-ES-EMUKILL",
         "GET /emukill stops the running emulator; /runningGame goes back to 201 within a few seconds.",
         f"{HTTP}; {ES} ApiSystem::emuKill()",
         "medium",
-        note="emuKill kills the emulator process. The server waits 10 s. On hardware (2026-10-21): quit_game on a "
-        "SNES (RetroArch) game was confirmed in 7.9 s, close to that limit. Standalone emulators (Dolphin, PCSX2) "
-        "not checked yet.",
+        status="hardware-verified",
+        note=SEEN + "quit_game was confirmed in 7.9 s for a SNES game (RetroArch) and 3.9 s for a GameCube game "
+        "(Dolphin), against the server's 10 s wait. PCSX2 not checked.",
     ),
     Assumption(
         "B-ES-GAME-ID",
@@ -114,7 +115,8 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         status="hardware-verified",
         note=SEEN + "playcount '2', gametime '210', lastplayed '20250629T112833', releasedate '19860101T000000', "
         "favorite 'false', all strings. Some gametime totals run to hundreds of hours: ES counts time a game "
-        "is left running.",
+        "is left running. playcount and lastplayed changed at launch, and gametime was already 22 s higher "
+        "20 s into a game.",
     ),
     Assumption(
         "B-ES-SYSTEMS",
