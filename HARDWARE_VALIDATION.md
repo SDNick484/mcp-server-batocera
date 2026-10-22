@@ -38,6 +38,11 @@ export BATOCERA_URL=192.168.1.20
 mkdir -p captures
 ```
 
+**Or on an Alpine machine on the LAN** (e.g. a Proxmox LXC), installed with `deploy/alpine/` or
+mcp-server-batocera's `setup-arcade.sh`: skip the clone, venv and `export`, set BATOCERA_URL in
+`/etc/mcp-server-batocera/env`, and run the `mcp-server-batocera ...` commands below as they are, as root over SSH.
+Replace `curl` with `wget -qO-` there, or `apk add curl`.
+
 **Tool calls** use `mcp-server-batocera call <tool> key=value ...`. It runs the tool through the same
 MCP layer the model uses and prints the structured result; `call tools` lists the tools. Add `--debug`
 (and `2> captures/<name>.log`) to record the HTTP traffic.
