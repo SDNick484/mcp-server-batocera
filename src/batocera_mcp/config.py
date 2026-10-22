@@ -45,10 +45,18 @@ class InvalidValue(ValueError):
     """A model-supplied value we refuse. The message is shown to the model."""
 
 
+# Systems EmulationStation flags as game systems that hold no games. Hidden from list_systems and
+# find_games, and refused by name, so the model never browses or "launches" them. On hardware,
+# imageviewer (Batocera's picture viewer) comes back with gamesystem "true" (B-ES-SYSTEMS).
+NON_GAME_SYSTEMS = {"imageviewer": "Batocera's picture viewer"}
+
+
 def system_name(value: str) -> str:
     v = value.strip().lower()
     if not SYSTEM_NAME.fullmatch(v) or ".." in v:
         raise InvalidValue(f"{value!r} isn't a system name; see list_systems (e.g. 'snes', 'mame').")
+    if v in NON_GAME_SYSTEMS:
+        raise InvalidValue(f"{v} is {NON_GAME_SYSTEMS[v]}, not a game system; see list_systems.")
     return v
 
 

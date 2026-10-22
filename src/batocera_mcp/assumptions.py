@@ -32,6 +32,8 @@ Status = Literal["simulator-only", "hardware-verified", "hardware-contradicted"]
 ES = "batocera-emulationstation"
 HTTP = f"{ES} es-app/src/services/HttpServerThread.cpp"
 
+SEEN = "Seen 2026-10-21 on Batocera 43 (ES 43couv.1) from a Proxmox LXC: "
+
 
 @dataclass(frozen=True)
 class Assumption:
@@ -47,11 +49,15 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
     # --- EmulationStation web API ---------------------------------------------------------
     Assumption(
         "B-ES-PUBLIC-ACCESS",
-        "Requests from other hosts get 403 unless 'Enable public web access' is on; with it (after a reboot), "
-        "EmulationStation listens on 0.0.0.0:1234.",
+        "Unless 'Enable public web access' is on, EmulationStation listens on 127.0.0.1 only, so other hosts' "
+        "connections are refused (its 403 for non-local clients is a second guard they can't reach); with it on "
+        "(after a reboot), it listens on 0.0.0.0:1234.",
         f"{HTTP} isAllowed() and listen()",
         "high",
-        note="Read in source. Whether the setting needs a reboot or only an ES restart isn't confirmed.",
+        status="hardware-verified",
+        note=SEEN + "connection refused with the setting off; doctor all ok after turning it on and rebooting. "
+        "The claim used to say other hosts get 403; they get a refused connection. Not yet known: whether "
+        "the reboot is needed.",
     ),
     Assumption(
         "B-ES-DURING-GAME",
@@ -59,7 +65,9 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "the emulator process).",
         f"{HTTP}; {ES} es-app/src/FileData.cpp launchGame()",
         "medium",
-        note="Follows from the threading, but some emulators or a low-memory board could stall it.",
+        status="hardware-verified",
+        note=SEEN + "/runningGame and /isIdle answered while a SNES (RetroArch) game ran, and get_status "
+        "worked during a GameCube game in Dolphin.",
     ),
     Assumption(
         "B-ES-RUNNINGGAME",
@@ -67,30 +75,38 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "/isIdle answers 200 [ true ] or 201 [ false ].",
         HTTP,
         "high",
-        note="Read in source; status codes not yet seen on the wire.",
+        status="hardware-verified",
+        note=SEEN + 'idle: /runningGame 201 {"msg":"NO GAME RUNNING"}, /isIdle 200 [ true ]; during a game: '
+        "/runningGame 200, /isIdle 201 [ false ].",
     ),
     Assumption(
         "B-ES-LAUNCH",
         "POST /launch takes the ROM path as the raw body, answers 200 whether or not the path is a known game, "
-        "cancels the screensaver, and starts the game a moment later on the UI thread.",
+        "cancels the screensaver, and starts the game a moment later on the UI thread, which an open popup "
+        "(/messagebox) holds until someone dismisses it.",
         f"{HTTP} /launch",
         "high",
-        note="Read in source. How long until /runningGame shows the game is a guess (the server waits 20 s).",
+        status="hardware-verified",
+        note=SEEN + "SNES and GameCube paths with spaces, commas, '&', an apostrophe and parentheses launched, "
+        "confirmed in /runningGame within 2.4 s; POST /launch of a missing path answered 200 and nothing started. "
+        "With a show_message popup open, a launch waited until the popup was dismissed (launch_game timed out).",
     ),
     Assumption(
         "B-ES-EMUKILL",
         "GET /emukill stops the running emulator; /runningGame goes back to 201 within a few seconds.",
         f"{HTTP}; {ES} ApiSystem::emuKill()",
         "medium",
-        note="emuKill kills the emulator process; standalone emulators (Dolphin, PCSX2) not checked. "
-        "The server waits 10 s.",
+        status="hardware-verified",
+        note=SEEN + "quit_game was confirmed in 7.9 s for a SNES game (RetroArch) and 3.9 s for a GameCube game "
+        "(Dolphin), against the server's 10 s wait. PCSX2 not checked.",
     ),
     Assumption(
         "B-ES-GAME-ID",
         "A game's id is the md5 hex of its path, stable across reloads.",
         f"{ES} es-app/src/services/HttpApi.cpp getFileDataId()",
         "high",
-        note="Read in source.",
+        status="hardware-verified",
+        note=SEEN + "id == md5(path) for all 512 mame games, and an id still found its game after reload_games.",
     ),
     Assumption(
         "B-ES-METADATA",
@@ -98,7 +114,11 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         'releasedate as 20261009T201500, favorite as "true"; EmulationStation records play count and time itself.',
         f"{ES} es-app/src/MetaData.cpp, HttpApi.cpp getFileDataJson()",
         "high",
-        note="Read in source; the time format is from gamelist.xml conventions, not seen in an API reply.",
+        status="hardware-verified",
+        note=SEEN + "playcount '2', gametime '210', lastplayed '20250629T112833', releasedate '19860101T000000', "
+        "favorite 'false', all strings. Some gametime totals run to hundreds of hours: ES counts time a game "
+        "is left running. playcount and lastplayed changed at launch, and gametime was already 22 s higher "
+        "20 s into a game.",
     ),
     Assumption(
         "B-ES-SYSTEMS",
@@ -106,14 +126,18 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         '"collection", "gamesystem" and "groupsystem" as the strings "true"/"false".',
         f"{ES} HttpApi.cpp getSystemDataJson()",
         "high",
-        note="Read in source.",
+        status="hardware-verified",
+        note=SEEN + "collection 'true' on custom collections, 'all' and 'favorites'; groupsystem 'true' on ports; "
+        "member systems carry a 'group' string. imageviewer (the picture viewer) is flagged gamesystem 'true' "
+        "too, so the server hides it by name (config.NON_GAME_SYSTEMS).",
     ),
     Assumption(
         "B-ES-THREADS",
         "The HTTP server runs a 2-thread pool, so the server loads at most 2 game lists at a time.",
         f"{HTTP} new_task_queue",
         "medium",
-        note="A courtesy limit: more parallel requests would queue, not fail.",
+        note="A courtesy limit: more parallel requests would queue, not fail. Not observable directly; on hardware, "
+        "find_games across 32 systems (3,000+ games, cold cache) took about 1 s.",
     ),
     Assumption(
         "B-ES-MESSAGES",
@@ -121,7 +145,9 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "until someone presses a button. Neither is visible over a running emulator.",
         HTTP,
         "medium",
-        note="Endpoints read in source; what they look like on screen, and over a game, not checked.",
+        status="hardware-verified",
+        note=SEEN + "a notification showed in the frontend; a popup stayed until a button was pressed; /notify "
+        "during a Dolphin game answered 200 but nothing appeared, then or later.",
     ),
     # --- RetroArch ----------------------------------------------------------------------
     Assumption(
@@ -130,7 +156,10 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "from the next game launch.",
         "batocera.linux python-src/batocera-launch-libretro emulator.py (retroarch.* keys copied to the config)",
         "medium",
-        note="The pass-through is read in source; that RetroArch then binds the LAN interface is not checked.",
+        status="hardware-verified",
+        note=SEEN + "with the line in batocera.conf, Batocera wrote network_cmd_enable = true and network_cmd_port = "
+        '"55355" into retroarchcustom.cfg, and RetroArch 1.22.2 answered from the LAN. The line was already there '
+        "(set before testing); RetroArch's own default is off.",
     ),
     Assumption(
         "B-RA-STATUS",
@@ -138,7 +167,10 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "other commands don't answer, and nothing answers while a standalone emulator runs.",
         "RetroArch command.c",
         "medium",
-        note="From RetroArch's source; the system/game fields' exact contents on Batocera aren't seen yet.",
+        status="hardware-verified",
+        note=SEEN + "\"GET_STATUS PLAYING super_nes,Super Mario World 2 - Yoshi's Island (USA) (Rev 1),"
+        "crc32=cf98ddaa\\n\", and PAUSED while paused. The system is RetroArch's name (super_nes), not Batocera's "
+        "(snes); the game is the ROM file name.",
     ),
     Assumption(
         "B-RA-COMMANDS",
@@ -146,7 +178,10 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "SHOW_MSG <text> do what their names say.",
         "RetroArch command.h",
         "medium",
-        note="Standard RetroArch commands; the screenshot folder is Batocera's default, not checked.",
+        status="hardware-verified",
+        note=SEEN + "all six on RetroArch 1.22.2 (snes9x): pause and resume, save and load (jumped back), a "
+        "screenshot named '<ROM>-261021-233238.png' in /userdata/screenshots, reset to the title screen, and "
+        "SHOW_MSG as small text in the bottom-left corner for a few seconds (easy to miss).",
     ),
     # --- playtracker (EmulationStation event scripts) -----------------------------------------
     Assumption(

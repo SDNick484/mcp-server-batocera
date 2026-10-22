@@ -8,6 +8,7 @@ import json
 import pytest
 
 from batocera_mcp import cli
+from batocera_mcp.assumptions import unverified
 from batocera_mcp.doctor import STEP, run_doctor
 
 
@@ -29,7 +30,9 @@ def test_doctor_ok(env, capsys):
     code, out, _ = run(["doctor"], capsys)
     assert code == 0 and out.rstrip().endswith("OK")
     assert "ok library    3 systems, 6 games" in out
-    assert "Not yet confirmed on hardware" in out and "B-ES-LAUNCH" in out
+    # Any still-unverified assumption, so recording hardware results doesn't break this test.
+    pending = unverified()
+    assert not pending or ("Not yet confirmed on hardware" in out and pending[0].id in out)
 
 
 def test_doctor_points_at_the_validation_step(env, capsys):

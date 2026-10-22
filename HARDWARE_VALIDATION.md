@@ -1,6 +1,6 @@
 # Hardware validation (Batocera cabinet)
 
-Nothing in this repo has run against a real cabinet yet. The server was built from Batocera's
+Steps 1 to 6 have run on a real cabinet (Batocera 43, 2026-10-21); the rest haven't yet. The server was built from Batocera's
 EmulationStation and RetroArch sources and tested against a wire-level simulator
 (`src/batocera_mcp/sim/fake_cabinet.py`: real HTTP, real UDP). playtracker was also tested against a
 real Mosquitto broker. Each step below depends only on the ones before it and names the assumptions it
@@ -13,16 +13,16 @@ edit this file.
 
 | Feature | Status | Step |
 | --- | --- | --- |
-| `doctor` (TCP, API, library, running game, RetroArch) | verified against simulator only | 1 |
-| `list_systems`, `find_games`, `get_game` | verified against simulator only | 2 |
-| `launch_game` (confirmed via /runningGame), `quit_game` | verified against simulator only | 3 |
-| `show_message` (frontend notification, popup, over a RetroArch game) | verified against simulator only | 4 |
-| RetroArch tools: pause, save/load state, screenshot, reset | verified against simulator only | 5 |
-| Dry run and ActionResult | verified against simulator only | 6 |
+| `doctor` (TCP, API, library, running game, RetroArch) | verified on hardware | 1 |
+| `list_systems`, `find_games`, `get_game` | verified on hardware | 2 |
+| `launch_game` (confirmed via /runningGame), `quit_game` | verified on hardware | 3 |
+| `show_message` (frontend notification, popup, over a RetroArch game) | verified on hardware | 4 |
+| RetroArch tools: pause, save/load state, screenshot, reset | verified on hardware | 5 |
+| Dry run and ActionResult | verified on hardware | 6 |
 | playtracker install, Home Assistant discovery | verified against simulator only | 7 |
 | playtracker sessions and the short-session filter | verified against simulator only | 8 |
 | playtracker ignores screensaver activity | verified against simulator only | 9 |
-| Log redaction (shared logsafe.py) | verified against simulator only | 1 |
+| Log redaction (shared logsafe.py) | verified on hardware | 1 |
 
 ## Before you start
 
@@ -100,7 +100,8 @@ Confirms B-ES-MESSAGES.
 
 1. In the frontend: `call show_message text="Hello from Claude"`. **Record** what the notification looks
    like and how long it stays.
-2. `call show_message text="Popup test" style=popup`. Expect a dialog that waits for a button.
+2. `call show_message text="Popup test" style=popup`. Expect a dialog that waits for a button. While
+   it's open, a launch waits for it (B-ES-LAUNCH): dismiss it before step 4.3.
 3. While a standalone-emulator game runs (if you have one): `call show_message text=hi`. Expect a
    refusal. Optionally `curl -X POST --data hi http://192.168.1.20:1234/notify` and **record** whether
    anything shows over the game.
@@ -111,12 +112,15 @@ Confirms B-RA-ENABLE, B-RA-STATUS, B-RA-COMMANDS.
 
 1. With a RetroArch game running and nothing configured yet: `call get_status`. Expect
    `"retroarch": null`, and doctor's `x  retroarch` hint.
-2. `ssh root@192.168.1.20`, add `global.retroarch.network_cmd_enable=true` to
-   `/userdata/system/batocera.conf`, then quit and relaunch the game (B-RA-ENABLE).
+2. `ssh root@192.168.1.20`, and if `grep network_cmd /userdata/system/batocera.conf` finds nothing, add
+   `global.retroarch.network_cmd_enable=true` to that file, then quit and relaunch the game (B-RA-ENABLE).
+   It may already be there: something else (an earlier setup, another tool) may have turned it on.
 3. `call get_status`. Expect `retroarch.state` `playing`, with the system and game. **Record** the raw
-   reply: `printf GET_STATUS | nc -u -w1 192.168.1.20 55355` (B-RA-STATUS).
+   reply: `printf GET_STATUS | nc -u -w1 192.168.1.20 55355` (B-RA-STATUS), or where `nc` has no `-u`:
+   `python3 -c 'import socket; s=socket.socket(2,2); s.settimeout(2); s.sendto(b"GET_STATUS", ("192.168.1.20", 55355)); print(s.recv(4096))'`.
 4. `call pause_game paused=true`, then `paused=false`. Watch the screen.
-5. `call show_message text="Dinner in 5"`. Expect it over the game.
+5. `call show_message text="Dinner in 5"`. Expect it over the game: small text in the bottom-left corner
+   for a few seconds, so watch for it.
 6. `call save_state`, play on a little, `call load_state`: expect to jump back. `call take_screenshot`,
    then check `/userdata/screenshots` over SSH. `call reset_game`. **Record** anything that differs
    (B-RA-COMMANDS).

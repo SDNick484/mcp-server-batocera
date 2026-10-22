@@ -26,7 +26,7 @@ import httpx
 from mcp.server.mcpserver.exceptions import ToolError
 from typing_extensions import TypedDict
 
-from .config import Settings
+from .config import NON_GAME_SYSTEMS, Settings
 
 log = logging.getLogger(__name__)
 
@@ -143,9 +143,10 @@ def to_system(raw: dict[str, Any]) -> System:
 
 # ASSUMPTION B-ES-SYSTEMS: collections and groups are flagged with the strings "true"/"false".
 def is_game_system(raw: dict[str, Any]) -> bool:
-    """Real ROM systems only: not collections (favorites, last played) or groups."""
+    """Real ROM systems only: not collections (favorites, last played), groups, or ones without games."""
     return (
         raw.get("gamesystem") == "true"
+        and raw.get("name") not in NON_GAME_SYSTEMS
         and raw.get("collection") != "true"
         and raw.get("groupsystem") != "true"
         and raw.get("visible", "true") == "true"

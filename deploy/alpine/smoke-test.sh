@@ -71,10 +71,10 @@ STEP='run as the user directly'
 su-exec mcp-batocera mcp-server-batocera call get_status | grep -q '"reachable": true'
 
 STEP='setup-arcade.sh'
-# Both servers from GitHub at ARCADE_REF, as on a real container (CI passes the branch; both repos
-# use the same branch name for changes to the kit). The simulated cabinet answers on the standard
-# port at 127.0.0.1; nothing plays pixelweb, so Pixelcade's doctor is expected to fail and the
-# script to say so without stopping.
+# Both servers from GitHub at ARCADE_REF, as on a real container. CI passes the PR's branch when
+# mcp-server-pixelcade has one of the same name, otherwise main. The simulated cabinet answers on the
+# standard port at 127.0.0.1; nothing plays pixelweb, so Pixelcade's doctor is expected to fail and
+# the script to say so without stopping.
 if [ -n "${ARCADE_REF:-}" ]; then
 	STEP_LOG=/tmp/setup-arcade.log
 	ARCADE_HOST=127.0.0.1 sh /src/deploy/alpine/setup-arcade.sh >"$STEP_LOG" 2>&1 || { cat "$STEP_LOG"; false; }
@@ -84,6 +84,7 @@ if [ -n "${ARCADE_REF:-}" ]; then
 	grep -q 'doctor found problems for: pixelcade$' "$STEP_LOG"
 	mcp-server-pixelcade --version
 	ARCADE_HOST='127.0.0.1;reboot' sh /src/deploy/alpine/setup-arcade.sh 2>&1 | grep -q 'should be an IP address'
+	ARCADE_REF=no-such-ref-here sh /src/deploy/alpine/setup-arcade.sh 2>&1 | grep -q "has no branch, tag or commit 'no-such-ref-here'"
 fi
 
 echo "Alpine smoke test passed"
