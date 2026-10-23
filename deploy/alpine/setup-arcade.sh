@@ -68,7 +68,8 @@ done
 problems=""
 for s in $SERVERS; do
 	say "mcp-server-$s doctor"
-	"mcp-server-$s" doctor || problems="$problems $s"
+	# By full path: the shell running this may not have /usr/local/bin on PATH (seen once on an LXC).
+	"/usr/local/bin/mcp-server-$s" doctor || problems="$problems $s"
 done
 if [ -n "$problems" ]; then
 	say "doctor found problems for:$problems"
@@ -78,3 +79,7 @@ else
 	say "Every server reaches the cabinet."
 fi
 echo "Run them from any shell here: mcp-server-batocera call get_status, mcp-server-pixelcade call get_status."
+case ":$PATH:" in
+*:/usr/local/bin:*) ;;
+*) echo "(This shell's PATH has no /usr/local/bin, where they're installed: use the full path, or add it to PATH.)" ;;
+esac
