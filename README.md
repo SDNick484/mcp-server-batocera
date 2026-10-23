@@ -11,7 +11,8 @@ played to MQTT with Home Assistant discovery. It doesn't log screensaver activit
 > **Status: early, partly tested on hardware.** Built from Batocera's EmulationStation and RetroArch sources
 > and tested against a wire-level simulator; playtracker is also tested against a real Mosquitto broker.
 > On a real cabinet (Batocera 43), every MCP tool has been checked: `doctor`, the library, launching and
-> quitting, messages, RetroArch and dry run. playtracker isn't confirmed on hardware yet. See [HARDWARE_VALIDATION.md](HARDWARE_VALIDATION.md) and the
+> quitting, messages, RetroArch and dry run, and playtracker with Home Assistant (sessions, the short-session
+> filter, broker outages, and ignoring the screensaver). See [HARDWARE_VALIDATION.md](HARDWARE_VALIDATION.md) and the
 > [verification table](#verification-status).
 
 This is not an official Batocera project.
@@ -241,7 +242,7 @@ come out as below. Rename the device and they follow: `DEVICE_NAME=Game Room Arc
 | `binary_sensor.batocera_playing`        | on while a game runs   |                                                      |
 | `sensor.batocera_now_playing_system`    | system name            |                                                      |
 | `sensor.batocera_last_session`          | last game played       | system, rom, started, ended, duration_s              |
-| `sensor.batocera_last_session_duration` | minutes                |                                                      |
+| `sensor.batocera_last_session_length`   | minutes                |                                                      |
 | `event.batocera_game_session`           | fires `session_end`    | game, system, started, ended, duration_s             |
 | availability                            | `batocera/<id>/status` | online/offline (set on start, quit, shutdown, sleep) |
 
@@ -286,12 +287,12 @@ timing or versions; *low* means our own guess. Hardware results so far are from 
 | `B-RA-ENABLE` | medium | hardware-verified |
 | `B-RA-STATUS` | medium | hardware-verified |
 | `B-RA-COMMANDS` | medium | hardware-verified |
-| `B-PT-SCRIPTS` | high | simulator-only |
-| `B-PT-GAME-ARGS` | high | simulator-only |
-| `B-PT-SCREENSAVER` | high | simulator-only |
-| `B-PT-SCREENSAVER-START` | medium | simulator-only |
+| `B-PT-SCRIPTS` | high | hardware-verified |
+| `B-PT-GAME-ARGS` | high | hardware-verified |
+| `B-PT-SCREENSAVER` | high | hardware-verified |
+| `B-PT-SCREENSAVER-START` | medium | hardware-verified |
 | `B-PT-TMP` | medium | simulator-only |
-| `B-PT-HA-MQTT` | high | simulator-only |
+| `B-PT-HA-MQTT` | high | hardware-verified |
 
 ## Not yet included
 
