@@ -1,6 +1,7 @@
 # Hardware validation (Batocera cabinet)
 
-Steps 1 to 6 have run on a real cabinet (Batocera 43, 2026-10-21); the rest haven't yet. The server was built from Batocera's
+Every step has run on a real cabinet (Batocera 43: the server on 2026-10-21, playtracker on 2026-10-22)
+except the reboot in 7.4. The server was built from Batocera's
 EmulationStation and RetroArch sources and tested against a wire-level simulator
 (`src/batocera_mcp/sim/fake_cabinet.py`: real HTTP, real UDP). playtracker was also tested against a
 real Mosquitto broker. Each step below depends only on the ones before it and names the assumptions it
@@ -19,9 +20,9 @@ edit this file.
 | `show_message` (frontend notification, popup, over a RetroArch game) | verified on hardware | 4 |
 | RetroArch tools: pause, save/load state, screenshot, reset | verified on hardware | 5 |
 | Dry run and ActionResult | verified on hardware | 6 |
-| playtracker install, Home Assistant discovery | verified against simulator only | 7 |
-| playtracker sessions and the short-session filter | verified against simulator only | 8 |
-| playtracker ignores screensaver activity | verified against simulator only | 9 |
+| playtracker install, Home Assistant discovery | verified on hardware (reboot, 7.4, not yet) | 7 |
+| playtracker sessions and the short-session filter | verified on hardware | 8 |
+| playtracker ignores screensaver activity | verified on hardware | 9 |
 | Log redaction (shared logsafe.py) | verified on hardware | 1 |
 
 ## Before you start
@@ -139,9 +140,12 @@ Confirms B-PT-SCRIPTS, B-PT-HA-MQTT, B-PT-TMP.
 1. Create the Home Assistant user and copy the files as in the README's *Play tracking* section. Set
    `MIN_SESSION_SECONDS=60`.
 2. Restart EmulationStation (*Quit > Restart EmulationStation*). Over SSH:
-   `cat /tmp/playtracker/playtracker.log`. Expect `start -> 9 message(s)` and no `publish failed`
+   `cat /tmp/playtracker/playtracker.log`. Expect `start -> 8 message(s)` and no `publish failed`
    (B-PT-SCRIPTS). If nothing is logged, check `ls -l` shows `x`, and `which python3`.
 3. In Home Assistant: *Settings > Devices > MQTT*: a device with six entities (B-PT-HA-MQTT).
+   If entities you don't recognise share the device (another tracker publishing the same ids), find and
+   remove that publisher, then clear its retained discovery topics: an empty retained `mqtt.publish` to
+   each `homeassistant/.../config` topic makes Home Assistant drop the entity.
    **Record** the entity ids it chose.
 4. Reboot the cabinet; the log should show the announcement again after boot (B-PT-TMP).
 

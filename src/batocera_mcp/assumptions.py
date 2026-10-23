@@ -33,6 +33,7 @@ ES = "batocera-emulationstation"
 HTTP = f"{ES} es-app/src/services/HttpServerThread.cpp"
 
 SEEN = "Seen 2026-10-21 on Batocera 43 (ES 43couv.1) from a Proxmox LXC: "
+SEEN_PT = "Seen 2026-10-22 on Batocera 43 with Home Assistant's Mosquitto add-on: "
 
 
 @dataclass(frozen=True)
@@ -190,7 +191,10 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "on every event, event name first, without waiting (asynchronously), with python3 available.",
         f"{ES} es-core/src/Scripting.cpp fireEvent()",
         "high",
-        note="Read in source. The +x requirement and python3's path on the cabinet aren't checked.",
+        status="hardware-verified",
+        note=SEEN_PT + "playtracker.py (chmod +x) directly in scripts/ received start, game-start, game-end, "
+        "screensaver-start/stop, wake and game-selected with the event name first; python3 was on the PATH. "
+        "Pixelcade's per-event subfolders kept working alongside.",
     ),
     Assumption(
         "B-PT-GAME-ARGS",
@@ -198,7 +202,10 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "nothing; game-selected passes system, plain path and name.",
         f"{ES} es-app/src/FileData.cpp, utils/FileSystemUtil.cpp getEscapedPath()",
         "high",
-        note="Read in source; quoting of names with spaces comes from Scripting.cpp and isn't seen yet.",
+        status="hardware-verified",
+        note=SEEN_PT + "game-start passed '/userdata/roms/snes/Super\\ Mario\\ World\\ 2\\ -\\ Yoshi\\'s\\ "
+        "Island\\ \\(USA\\)\\ \\(Rev\\ 1\\).zip', which playtracker unescaped to the real path; game-end "
+        "passed nothing.",
     ),
     Assumption(
         "B-PT-SCREENSAVER",
@@ -206,7 +213,9 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "video and slideshow fire game-selected for each game they show.",
         f"{ES} es-app/src/SystemScreenSaver.cpp, guis/GuiGeneralScreensaverOptions.cpp",
         "high",
-        note="Read in source. The core claim behind 'screensaver activity isn't logged'.",
+        status="hardware-verified",
+        note=SEEN_PT + "ten minutes of random video logged no game-start, and Home Assistant stayed Idle; "
+        "game-selected fired for the videos (playtracker matched the one START launched).",
     ),
     Assumption(
         "B-PT-SCREENSAVER-START",
@@ -214,7 +223,10 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "the game shown; the scripts can finish in either order.",
         f"{ES} es-core/src/Window.cpp input(), SystemScreenSaver::launchGame()",
         "medium",
-        note="Order read in source; script timing on the cabinet isn't seen. playtracker allows 10 s.",
+        status="hardware-verified",
+        note=SEEN_PT + "START on a video logged screensaver-stop then game-start in the same second; with "
+        "IGNORE_SCREENSAVER_LAUNCHES=yes the 11-minute session sent nothing, and a game picked from the list "
+        "after waking was logged. playtracker allows 10 s.",
     ),
     Assumption(
         "B-PT-TMP",
@@ -229,8 +241,11 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "sensor, binary_sensor and event entities from the retained config messages.",
         "Home Assistant Mosquitto add-on docs; MQTT discovery docs",
         "high",
-        note="Discovery and the MQTT client were tested against a real Mosquitto 2.0 broker; not yet against "
-        "the owner's Home Assistant.",
+        status="hardware-verified",
+        note=SEEN_PT + "a Home Assistant user's login worked; discovery created the device and six entities "
+        "(entity ids come from the display names: Last played is sensor.<device>_last_session, Last session "
+        "length sensor.<device>_last_session_length). A session played while the add-on was stopped was queued "
+        "and arrived with the next event.",
     ),
 )
 
