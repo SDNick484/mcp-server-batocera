@@ -225,7 +225,9 @@ async def find_games(
     if query and not query_words:
         raise BatoceraError("The query has no letters or digits to match.")
 
-    sem = asyncio.Semaphore(2)  # ASSUMPTION B-ES-THREADS: EmulationStation serves the API from 2 threads
+    # ASSUMPTION B-ES-THREADS: EmulationStation's pool has 8+ threads, so 2 at a time leaves it room for other
+    # clients (its web UI, Pixelcade); hardware showed 32 systems load in about 1 s at this rate.
+    sem = asyncio.Semaphore(2)
 
     async def load(n: str) -> dict[str, dict[str, Any]]:
         async with sem:

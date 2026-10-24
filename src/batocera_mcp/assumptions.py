@@ -134,11 +134,17 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
     ),
     Assumption(
         "B-ES-THREADS",
-        "The HTTP server runs a 2-thread pool, so the server loads at most 2 game lists at a time.",
-        f"{HTTP} new_task_queue",
-        "medium",
-        note="A courtesy limit: more parallel requests would queue, not fail. Not observable directly; on hardware, "
-        "find_games across 32 systems (3,000+ games, cold cache) took about 1 s.",
+        "The HTTP server hands each connection to a fixed pool of max(8, cores - 1) threads (cpp-httplib's "
+        "default), and a connection that sends nothing holds its thread for the 5 s read timeout. The server "
+        "loads at most 2 game lists at a time, a courtesy that leaves most of the pool to other clients.",
+        f"{HTTP} at batocera.linux 43's pinned commit 68f45afb (no new_task_queue, so httplib.h's "
+        "ThreadPool(CPPHTTPLIB_THREAD_POOL_COUNT)); ES master since 7cc47355 (2026-08-19) uses ThreadPool(2, "
+        "CPPHTTPLIB_THREAD_POOL_COUNT): 2 threads growing to the same maximum when busy",
+        "high",
+        note="Corrected 2026-10-23: the claim used to be a 2-thread pool, read from ES master's ThreadPool(2, ...), "
+        "which Batocera 43 doesn't have and which grows past 2 anyway. More parallel requests would only queue, "
+        "never fail. Measure it with python -m batocera_mcp.probe (HARDWARE_VALIDATION.md step 2.6). On hardware, "
+        "find_games across 32 systems (3,000+ games, cold cache) took about 1 s at 2 at a time.",
     ),
     Assumption(
         "B-ES-MESSAGES",
@@ -230,10 +236,14 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
     ),
     Assumption(
         "B-PT-TMP",
-        "/tmp is cleared on reboot, so playtracker re-announces itself to Home Assistant once per boot.",
+        "/tmp is a tmpfs, emptied by any restart, so after a power cut or crash (when no quit, reboot or shutdown "
+        "event ran to delete it) playtracker's announced marker is gone and it re-announces to Home Assistant.",
         "Batocera mounts /tmp as tmpfs",
         "medium",
-        note="Standard on Batocera images; not checked on this cabinet.",
+        note="A clean reboot doesn't test this: playtracker deletes the marker itself on reboot, shutdown and "
+        "quit. Check the filesystem instead: stat -f -c %T /tmp prints tmpfs (HARDWARE_VALIDATION.md step 7.4). "
+        "If it were wrong, the retained discovery messages would still keep the entities; only a re-announce "
+        "after a power cut would be missed.",
     ),
     Assumption(
         "B-PT-HA-MQTT",

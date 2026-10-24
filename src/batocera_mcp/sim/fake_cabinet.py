@@ -13,6 +13,8 @@ server depends on, each behavior tagged with the assumption it stands for
   - the API keeps answering while a game runs (B-ES-DURING-GAME)
   - game ids are md5 of the path; metadata values are strings (B-ES-GAME-ID, B-ES-METADATA)
   - RetroArch answers GET_STATUS only for libretro systems (B-RA-STATUS)
+  - a fixed pool of ``http_workers`` threads (8, as on Batocera 43) serves connections, and a
+    connection that sends nothing holds its worker for ``read_timeout_s`` (B-ES-THREADS)
 
 Fault switches (``forbidden``, ``busy``, ``slow_s``, ``drop``, ``launch_fails``,
 ``kill_fails``, ``ra_answers``) let tests and you try the failure paths.
@@ -24,6 +26,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import queue
 import socket
 import threading
 import time
@@ -104,14 +107,50 @@ SYSTEM_INFO = {
 
 
 class _QuietHTTPServer(ThreadingHTTPServer):
+    """One thread per connection, unless ``workers`` is set: then a fixed pool, as cpp-httplib has.
+
+    Why model the pool at all: with a fixed pool, connections beyond its size queue instead of being served,
+    and an idle connection (an HTTP keep-alive, or one that never sends a request) keeps a worker busy until
+    the read timeout. A thread-per-connection fake would hide both.
+    """
+
     daemon_threads = True
+
+    def __init__(self, address: tuple[str, int], handler: Any, workers: int | None = None) -> None:
+        super().__init__(address, handler)
+        self._jobs: queue.Queue[tuple[Any, Any] | None] | None = None
+        if workers:
+            self._jobs = queue.Queue()  # unbounded, like cpp-httplib's job list
+            for _ in range(workers):
+                # Daemon threads, unlike concurrent.futures', so a worker stuck on an idle socket never
+                # holds up interpreter exit.
+                threading.Thread(target=self._work, daemon=True).start()
+
+    def _work(self) -> None:
+        assert self._jobs is not None
+        while (job := self._jobs.get()) is not None:
+            self.process_request_thread(*job)
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        if self._jobs is None:
+            super().process_request(request, client_address)
+        else:
+            self._jobs.put((request, client_address))
+
+    def server_close(self) -> None:
+        super().server_close()
+        if self._jobs is not None:
+            for _ in range(self._jobs.qsize() + 64):  # wake every worker; more Nones than workers is harmless
+                self._jobs.put(None)
 
     def handle_error(self, request: Any, client_address: Any) -> None:
         pass  # the drop fault closes sockets mid-request on purpose; socketserver would print a traceback
 
 
 class FakeCabinet:
-    def __init__(self, host: str = "127.0.0.1", es_port: int = 0, ra_port: int = 0) -> None:
+    def __init__(
+        self, host: str = "127.0.0.1", es_port: int = 0, ra_port: int = 0, http_workers: int | None = 8
+    ) -> None:
         self.library = default_library()
         self.version = "43.1-sim"
         self.running: dict[str, Any] | None = None
@@ -126,6 +165,9 @@ class FakeCabinet:
         self.ra_answers = True  # False: RetroArch network commands off
         self.launch_delay_s = 0.4
         self.kill_delay_s = 0.3
+        # ASSUMPTION B-ES-THREADS: cpp-httplib's fixed pool, max(8, cores - 1) threads on Batocera 43, and its
+        # 5 s read timeout. http_workers=None gives a thread per connection instead.
+        self.read_timeout_s = 5.0
         # What happened
         self.requests: list[tuple[str, str, str]] = []
         self.ra_received: list[str] = []
@@ -135,7 +177,7 @@ class FakeCabinet:
         self._held_launch: str | None = None  # a /launch the open popup is holding back
         self.reloads = 0
         self._lock = threading.RLock()
-        self._http = _QuietHTTPServer((host, es_port), self._handler())
+        self._http = _QuietHTTPServer((host, es_port), self._handler(), workers=http_workers)
         self._udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._udp.bind((host, ra_port))
         self._threads: list[threading.Thread] = []
@@ -304,6 +346,13 @@ class FakeCabinet:
 
         class Handler(BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.1"
+
+            def setup(self) -> None:
+                super().setup()
+                # An idle connection (no request yet, or an idle keep-alive) gives up its worker after this
+                # long, as cpp-httplib's does. Set per connection, not as the class's `timeout`, so a test
+                # can change read_timeout_s after the cabinet starts.
+                self.connection.settimeout(cabinet.read_timeout_s)
 
             def _do(self, method: str) -> None:
                 length = int(self.headers.get("Content-Length") or 0)

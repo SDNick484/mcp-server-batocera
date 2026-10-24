@@ -264,7 +264,7 @@ sensor:
 ```
 
 If the broker is unreachable (Home Assistant restarting, say), messages are queued in `/tmp/playtracker`
-and sent with the next event. `/tmp` is cleared on reboot. If the cabinet loses power, `status` stays
+and sent with the next event. `/tmp` is a tmpfs, emptied by any restart. If the cabinet loses power, `status` stays
 `online` until it next boots, because the script doesn't keep a connection open for an MQTT last will.
 
 ## Verification status
@@ -285,7 +285,7 @@ timing or versions; *low* means our own guess. Hardware results so far are from 
 | `B-ES-GAME-ID` | high | hardware-verified |
 | `B-ES-METADATA` | high | hardware-verified |
 | `B-ES-SYSTEMS` | high | hardware-verified |
-| `B-ES-THREADS` | medium | simulator-only |
+| `B-ES-THREADS` | high | simulator-only |
 | `B-ES-MESSAGES` | medium | hardware-verified |
 | `B-RA-ENABLE` | medium | hardware-verified |
 | `B-RA-STATUS` | medium | hardware-verified |

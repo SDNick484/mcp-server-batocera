@@ -254,7 +254,8 @@ class Tracker:
     def handle(self, event: str, args: list[str]) -> list[Message]:
         now = self.clock()
         out: list[Message] = []
-        # Discovery once per boot (ASSUMPTION B-PT-TMP: /tmp is cleared on reboot); retain keeps the entities.
+        # Discovery once per boot: reboot, shutdown and quit delete the marker below, and after a power cut
+        # it's gone because /tmp is a tmpfs (ASSUMPTION B-PT-TMP). Retained messages keep the entities anyway.
         marker = self.state.root / "announced"
         announced = False
         if not marker.exists() and event not in ("game-selected", "system-selected"):

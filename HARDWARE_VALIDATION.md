@@ -77,7 +77,11 @@ Confirms B-ES-SYSTEMS, B-ES-METADATA, B-ES-GAME-ID, B-ES-THREADS.
 5. Note one game's id. Run `call reload_games`, wait for the rescan, then `call get_game system=<s>
    game_id=<id>`. The id should still work (B-ES-GAME-ID).
 6. `time mcp-server-batocera call find_games query=zzz` (searches every system): **record** how long.
-   B-ES-THREADS limits it to 2 requests at a time.
+   It loads 2 systems at a time, well within EmulationStation's pool. To measure the pool (B-ES-THREADS):
+   `python -m batocera_mcp.probe` (on the Alpine install, `/opt/mcp-server-batocera/venv/bin/python -m
+   batocera_mcp.probe 192.168.1.20`). It holds k idle connections and times a request; expect it to stall
+   (about 5 s) at k = 8 on a cabinet with 9 or fewer CPU threads, and **record** where it stalls and
+   `nproc` on the cabinet. The API is busy for those 5 s; nothing else is affected.
 
 ## 3. Launching and quitting
 
@@ -147,7 +151,9 @@ Confirms B-PT-SCRIPTS, B-PT-HA-MQTT, B-PT-TMP.
    remove that publisher, then clear its retained discovery topics: an empty retained `mqtt.publish` to
    each `homeassistant/.../config` topic makes Home Assistant drop the entity.
    **Record** the entity ids it chose.
-4. Reboot the cabinet; the log should show the announcement again after boot (B-PT-TMP).
+4. Over SSH: `stat -f -c %T /tmp` prints `tmpfs` (B-PT-TMP). A reboot from the menu doesn't show this:
+   playtracker deletes its `announced` marker itself on reboot, shutdown and quit, so it would re-announce
+   either way. What `tmpfs` guarantees is the re-announce after a power cut, when no event runs.
 
 ## 8. playtracker sessions
 
