@@ -20,6 +20,8 @@ classifiers = [
 dependencies = [
     "mcp>=2.3,<3",
     "httpx>=0.27",
+    "pyjwt[crypto]>=2.10",   # verifying Cloudflare Access assertions (remote.py)
+    "uvicorn>=0.31",         # the HTTP transport (remote.py)
     "typing_extensions>=4.7",
 ]
 

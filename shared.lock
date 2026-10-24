@@ -5,4 +5,3 @@
 repo = "SDNick484/mcp-server-shared"
 commit = "46275869c7177486ca5d6cc3cdcc51af49971507"
 package = "batocera_mcp"
-exclude = ["remote"]

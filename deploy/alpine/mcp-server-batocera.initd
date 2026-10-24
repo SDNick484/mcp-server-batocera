@@ -1,0 +1,33 @@
+#!/sbin/openrc-run
+# OpenRC service for mcp-server-batocera (Streamable HTTP), e.g. in an Alpine LXC.
+# Installed as /etc/init.d/mcp-server-batocera by install.sh. Every setting
+# (BATOCERA_*, HTTP and Cloudflare Access) lives in /etc/mcp-server-batocera/env.
+
+name="mcp-server-batocera"
+description="MCP server for a Batocera cabinet, over Streamable HTTP"
+
+# supervise-daemon restarts the server if it exits (respawn_* below).
+supervisor="supervise-daemon"
+# run.sh loads /etc/mcp-server-batocera/env, then execs the CLI with these arguments.
+# --http is an argument here, not run.sh's default, so `mcp-server-batocera` with no
+# arguments (over SSH, say) still speaks stdio. Dry run and log redaction are env-file
+# settings (BATOCERA_DRY_RUN, BATOCERA_LOG_UNREDACTED), so there's nothing else to pass.
+command="/opt/mcp-server-batocera/run.sh"
+command_args="serve --http"
+command_user="mcp-batocera:mcp-batocera"
+directory="/var/lib/mcp-server-batocera"
+output_log="/var/log/mcp-server-batocera/server.log"
+error_log="/var/log/mcp-server-batocera/server.log"
+respawn_delay=5
+respawn_max=10
+respawn_period=300
+
+depend() {
+	need net
+	after firewall
+}
+
+start_pre() {
+	checkpath --directory --mode 0750 --owner mcp-batocera:mcp-batocera /var/log/mcp-server-batocera
+	checkpath --directory --mode 0700 --owner mcp-batocera:mcp-batocera /var/lib/mcp-server-batocera
+}
