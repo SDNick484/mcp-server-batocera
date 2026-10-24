@@ -30,27 +30,40 @@ jobs:
       - run: pytest
 
   # The command-line install on Alpine (musl), in a stock container: deploy/alpine/smoke-test.sh.
-  # ARCADE_REF has it also run setup-arcade.sh, which installs both arcade servers from GitHub at
-  # that ref. Changes to both kits go on same-named branches, so CI tests them together.
+  # ARCADE_REF has it also run setup-arcade.sh, which installs both arcade servers from GitHub
+  # (each pinned to a commit below). Changes to both kits go on same-named branches, so CI tests
+  # them together.
   alpine:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      # setup-arcade.sh installs both repos at one ref. A branch only this repo has (most PRs) has no
-      # mcp-server-pixelcade counterpart, so it falls back to main. The branch name comes in through
-      # env, not ${{ }} in the script: a PR's branch name is untrusted text.
-      - name: Pick the ref setup-arcade.sh installs
+      # setup-arcade.sh installs this repo at the commit under test, and mcp-server-pixelcade at its
+      # branch of the same name if it has one (most PRs don't), otherwise at main. Both are pinned to
+      # commits here, once: by the time the container clones, a twin PR may have merged and its branch
+      # been deleted (it happened: Pixelcade #7 merged while Batocera #10's CI was running). A merged
+      # branch's commit stays reachable from main, so the pinned commit still checks out.
+      # The branch name comes in through env, not ${{ }} in the script: a PR's branch name is untrusted text.
+      - name: Pin the commits setup-arcade.sh installs
         id: ref
         env:
           BRANCH: ${{ github.head_ref || github.ref_name }}
+          OWN: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          ref="$BRANCH"
-          git ls-remote --exit-code --heads https://github.com/SDNick484/mcp-server-pixelcade "refs/heads/$ref" >/dev/null || ref=main
-          echo "setup-arcade.sh will install: $ref"
-          echo "ref=$ref" >>"$GITHUB_OUTPUT"
+          tip() { git ls-remote --heads https://github.com/SDNick484/mcp-server-pixelcade | awk -v r="refs/heads/$1" '$2 == r { print $1 }'; }
+          from="$BRANCH"
+          pixelcade=$(tip "$BRANCH")
+          [ -n "$pixelcade" ] || { from=main; pixelcade=$(tip main); }
+          [ -n "$pixelcade" ] || { echo "::error::couldn't read mcp-server-pixelcade's branches"; exit 1; }
+          echo "setup-arcade.sh will install mcp-server-batocera $OWN and mcp-server-pixelcade $pixelcade ($from)"
+          echo "batocera=$OWN" >>"$GITHUB_OUTPUT"
+          echo "pixelcade=$pixelcade" >>"$GITHUB_OUTPUT"
       - env:
-          ARCADE_REF: ${{ steps.ref.outputs.ref }}
-        run: docker run --rm -v "$PWD:/src" -w /src -e ARCADE_REF python:3.12-alpine sh deploy/alpine/smoke-test.sh
+          ARCADE_REF: main  # setup-arcade.sh's fallback; both servers are pinned below
+          ARCADE_REF_BATOCERA: ${{ steps.ref.outputs.batocera }}
+          ARCADE_REF_PIXELCADE: ${{ steps.ref.outputs.pixelcade }}
+        run: >-
+          docker run --rm -v "$PWD:/src" -w /src -e ARCADE_REF -e ARCADE_REF_BATOCERA -e ARCADE_REF_PIXELCADE
+          python:3.12-alpine sh deploy/alpine/smoke-test.sh
 
   # The files shared with the sibling servers (shared.lock lists which) must match
   # mcp-server-shared. See that repo's README.

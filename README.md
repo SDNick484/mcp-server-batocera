@@ -146,8 +146,8 @@ or from elsewhere through the Proxmox host:
 ssh root@<proxmox host> "pct exec <container id> -- env ARCADE_HOST=<cabinet IP> sh -s" < deploy/alpine/setup-arcade.sh
 ```
 
-`ARCADE_REF` picks a branch, tag or commit (default `main`); re-running updates the code and keeps
-the settings. CI runs `deploy/alpine/smoke-test.sh` in a stock `python:3.12-alpine` container: install,
+`ARCADE_REF` picks a branch, tag or commit (default `main`), and `ARCADE_REF_BATOCERA` or
+`ARCADE_REF_PIXELCADE` one server's ref instead; re-running updates the code and keeps the settings. CI runs `deploy/alpine/smoke-test.sh` in a stock `python:3.12-alpine` container: install,
 upgrade, the test suite on musl, `doctor` and `call` through the command on `PATH` against the
 simulator, and `setup-arcade.sh` itself.
 

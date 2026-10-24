@@ -9,6 +9,9 @@
 #   ARCADE_HOST     the cabinet's IP address or name: sets BATOCERA_URL and PIXELCADE_URL in each
 #                   server's /etc/mcp-server-<name>/env (omit to keep what's there)
 #   ARCADE_REF      the branch, tag or commit to install (default main)
+#   ARCADE_REF_BATOCERA, ARCADE_REF_PIXELCADE
+#                   that server's ref instead of ARCADE_REF, e.g. a commit of one repo only
+#                   (CI pins each repo's commit, so a branch deleted mid-run can't break it)
 #   ARCADE_SERVERS  which servers (default "batocera pixelcade")
 #   ARCADE_GIT      where the repos live (default https://github.com/SDNick484)
 #
@@ -41,18 +44,23 @@ mkdir -p /srv/src
 
 for s in $SERVERS; do
 	dir="/srv/src/mcp-server-$s"
+	case "$s" in
+	batocera) ref="${ARCADE_REF_BATOCERA:-$REF}" refvar=ARCADE_REF_BATOCERA ;;
+	pixelcade) ref="${ARCADE_REF_PIXELCADE:-$REF}" refvar=ARCADE_REF_PIXELCADE ;;
+	esac
+	[ "$ref" != "$REF" ] || refvar=ARCADE_REF
 	if [ -d "$dir/.git" ]; then
 		git -C "$dir" fetch -q --tags origin
 	else
 		git clone -q "$GIT/mcp-server-$s.git" "$dir"
 	fi
 	# A branch name means the remote's copy of it; anything else (a tag, a commit) is used as given.
-	if git -C "$dir" rev-parse -q --verify "origin/$REF^{commit}" >/dev/null; then
-		git -C "$dir" checkout -q --detach "origin/$REF"
-	elif git -C "$dir" rev-parse -q --verify "$REF^{commit}" >/dev/null; then
-		git -C "$dir" checkout -q --detach "$REF"
+	if git -C "$dir" rev-parse -q --verify "origin/$ref^{commit}" >/dev/null; then
+		git -C "$dir" checkout -q --detach "origin/$ref"
+	elif git -C "$dir" rev-parse -q --verify "$ref^{commit}" >/dev/null; then
+		git -C "$dir" checkout -q --detach "$ref"
 	else
-		echo "mcp-server-$s has no branch, tag or commit '$REF' (ARCADE_REF)." >&2
+		echo "mcp-server-$s has no branch, tag or commit '$ref' ($refvar)." >&2
 		exit 1
 	fi
 	say "mcp-server-$s at $(git -C "$dir" log -1 --format='%h %s')"

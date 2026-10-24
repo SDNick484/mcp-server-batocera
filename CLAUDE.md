@@ -28,8 +28,10 @@ reasoning behind non-obvious changes instead of only making them.
 - `deploy/alpine/`: command-line install on Alpine (venv, `mcp-batocera` user, `/etc/.../env`, a `PATH`
   command that drops to the user; caller's environment beats the file), plus `setup-arcade.sh`, which
   installs this and mcp-server-pixelcade from GitHub (e.g. through `pct exec`). No service: nothing listens.
-  Keep it in step with mcp-server-pixelcade's. CI runs setup-arcade.sh at the PR's branch when
-  mcp-server-pixelcade has a branch of the same name (put changes to both kits on one), otherwise at main.
+  Keep it in step with mcp-server-pixelcade's. CI runs setup-arcade.sh with this repo at the commit
+  under test and mcp-server-pixelcade at its same-named branch (put changes to both kits on one), else
+  main, each pinned to a commit up front (`ARCADE_REF_BATOCERA`, `ARCADE_REF_PIXELCADE`) so a twin
+  PR merging mid-run, which deletes its branch, can't break the job.
 - `playtracker/playtracker.py`: runs **on the cabinet**, stdlib only (no pip on Batocera), single file.
   `Tracker` (pure session logic), a minimal MQTT 3.1.1 QoS 1 publisher, and an outbox for broker outages
 - `tests/`: `conftest.py` (a `FakeCabinet` per test, on free ports), `test_tools` (in-process MCP `Client`,
