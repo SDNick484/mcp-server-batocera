@@ -65,7 +65,7 @@ reasoning behind non-obvious changes instead of only making them.
 The authoritative list, with ids and status, is `assumptions.py`; this is the readable summary.
 From batocera-emulationstation (`es-app/src/services/HttpServerThread.cpp`, `HttpApi.cpp`,
 `SystemScreenSaver.cpp`, `FileData.cpp`, `es-core/src/Scripting.cpp`) and batocera.linux
-(`python-src/batocera-launch-libretro/.../emulator.py`), read 2026-10. **Not yet verified on hardware.**
+(`python-src/batocera-launch-libretro/.../emulator.py`), read 2026-10. All verified on Batocera 43 (2026-10-21 to 24).
 - Non-127.0.0.1 clients get 403 unless `PublicWebAccess`; with it, ES listens on 0.0.0.0:1234.
 - `/runningGame` answers 201 `{"msg":"NO GAME RUNNING"}` when idle. `/isIdle` 200 `[ true ]` / 201.
 - `POST /launch` body = ROM path; it answers 200 even for unknown paths, so confirm via `/runningGame`.

@@ -34,6 +34,7 @@ HTTP = f"{ES} es-app/src/services/HttpServerThread.cpp"
 
 SEEN = "Seen 2026-10-21 on Batocera 43 (ES 43couv.1) from a Proxmox LXC: "
 SEEN_PT = "Seen 2026-10-22 on Batocera 43 with Home Assistant's Mosquitto add-on: "
+SEEN_24 = "Seen 2026-10-24 on Batocera 43, on the cabinet over SSH: "
 
 
 @dataclass(frozen=True)
@@ -141,10 +142,11 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "ThreadPool(CPPHTTPLIB_THREAD_POOL_COUNT)); ES master since 7cc47355 (2026-08-19) uses ThreadPool(2, "
         "CPPHTTPLIB_THREAD_POOL_COUNT): 2 threads growing to the same maximum when busy",
         "high",
-        note="Corrected 2026-10-23: the claim used to be a 2-thread pool, read from ES master's ThreadPool(2, ...), "
-        "which Batocera 43 doesn't have and which grows past 2 anyway. More parallel requests would only queue, "
-        "never fail. Measure it with python -m batocera_mcp.probe (HARDWARE_VALIDATION.md step 2.6). On hardware, "
-        "find_games across 32 systems (3,000+ games, cold cache) took about 1 s at 2 at a time.",
+        status="hardware-verified",
+        note=SEEN_24 + "nproc 4, and batocera_mcp.probe answered at once with up to 7 idle connections held and "
+        "stalled 4.7 s (the read timeout, less the probe's 0.3 s settle) with 8: a pool of 8, max(8, 4 - 1). "
+        "Corrected 2026-10-23 from a 2-thread pool, read from ES master's ThreadPool(2, ...), which Batocera 43 "
+        "doesn't have. find_games across 32 systems (3,000+ games, cold cache) took about 1 s at 2 at a time.",
     ),
     Assumption(
         "B-ES-MESSAGES",
@@ -240,10 +242,9 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "event ran to delete it) playtracker's announced marker is gone and it re-announces to Home Assistant.",
         "Batocera mounts /tmp as tmpfs",
         "medium",
-        note="A clean reboot doesn't test this: playtracker deletes the marker itself on reboot, shutdown and "
-        "quit. Check the filesystem instead: stat -f -c %T /tmp prints tmpfs (HARDWARE_VALIDATION.md step 7.4). "
-        "If it were wrong, the retained discovery messages would still keep the entities; only a re-announce "
-        "after a power cut would be missed.",
+        status="hardware-verified",
+        note=SEEN_24 + "stat -f -c %T /tmp printed tmpfs. A clean reboot wouldn't have shown this: playtracker "
+        "deletes the marker itself on reboot, shutdown and quit, so the tmpfs only matters after a power cut.",
     ),
     Assumption(
         "B-PT-HA-MQTT",
