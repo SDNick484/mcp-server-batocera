@@ -1,7 +1,8 @@
 """mcp-server-batocera: an MCP server for a Batocera cabinet.
 
 Commands:
-  serve      run the MCP server over stdio (the default)
+  serve      run the MCP server: stdio (the default), or --http for a long-lived service
+             behind Cloudflare Access (remote.py)
   doctor     check every layer between here and the cabinet (`check` is an alias)
   simulate   run a fake cabinet (EmulationStation + RetroArch) to try things without one
   call       call one tool exactly as the model would, and print the result
@@ -18,7 +19,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import __version__
+from . import __version__, remote
 from .config import flag, load_settings
 from .logsafe import setup_logging
 
@@ -122,8 +123,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="show LAN addresses in logs and doctor output (BATOCERA_LOG_UNREDACTED=1); secrets stay hidden",
     )
     sub = parser.add_subparsers(dest="cmd")
-    serve = sub.add_parser("serve", parents=[common], help="run the MCP server over stdio (default)")
+    serve = sub.add_parser("serve", parents=[common], help="run the MCP server (stdio; --http for a service)")
     serve.add_argument("--dry-run", action="store_true", help="read the cabinet, change nothing (BATOCERA_DRY_RUN=1)")
+    remote.add_http_arguments(serve, default_port=8717, default_path="/batocera/mcp")
     for name in ("doctor", "check"):
         doc = sub.add_parser(name, parents=[common], help="check every layer between here and the cabinet")
         doc.add_argument("--json", action="store_true", help="the full report as JSON (all assumption lists)")
@@ -158,4 +160,10 @@ def main(argv: list[str] | None = None) -> None:
 
     from .server import mcp  # imported late: doctor and simulate don't need the server code
 
-    mcp.run()
+    if getattr(args, "http", False):  # absent when no subcommand was given: plain `mcp-server-batocera` is stdio
+        try:
+            remote.serve_http(mcp, remote.http_config(args))
+        except remote.ConfigError as exc:
+            parser.exit(2, f"mcp-server-batocera: {exc}\n")
+    else:
+        mcp.run()  # stdio: JSON-RPC over stdin/stdout

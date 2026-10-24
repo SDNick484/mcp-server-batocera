@@ -23,21 +23,26 @@ reasoning behind non-obvious changes instead of only making them.
   fault switches; used by the tests and `simulate`
 - `src/batocera_mcp/logsafe.py`, `tasks.py`, `ratelimit.py` (and their tests): shared with the sibling
   servers, synced from `mcp-server-shared` by `scripts/sync_shared.py` at the commit in `shared.lock`.
-  `tasks.py` and `ratelimit.py` aren't used here yet. `remote.py` is excluded: this server is LAN-only.
+  `tasks.py` and `ratelimit.py` aren't used here yet. `remote.py` (and `test_remote.py`): the Streamable
+  HTTP transport behind Cloudflare Access, for `serve --http`.
 - `src/batocera_mcp/probe.py`: stdlib-only probe for EmulationStation's HTTP pool size (B-ES-THREADS)
-- `src/batocera_mcp/cli.py`: `serve` (default), `doctor` (`check`), `simulate`, `call`
-- `deploy/alpine/`: command-line install on Alpine (venv, `mcp-batocera` user, `/etc/.../env`, a `PATH`
-  command that drops to the user; caller's environment beats the file), plus `setup-arcade.sh`, which
-  installs this and mcp-server-pixelcade from GitHub (e.g. through `pct exec`). No service: nothing listens.
-  Keep it in step with mcp-server-pixelcade's. CI runs setup-arcade.sh with this repo at the commit
-  under test and mcp-server-pixelcade at its same-named branch (put changes to both kits on one), else
-  main, each pinned to a commit up front (`ARCADE_REF_BATOCERA`, `ARCADE_REF_PIXELCADE`) so a twin
-  PR merging mid-run, which deletes its branch, can't break the job.
+- `src/batocera_mcp/cli.py`: `serve` (default; stdio, or `--http` on 127.0.0.1:8717/batocera/mcp through
+  `remote.py`), `doctor` (`check`), `simulate`, `call`
+- `deploy/alpine/`: install on Alpine (venv, `mcp-batocera` user, `/etc/.../env`, an OpenRC service
+  running `run.sh serve --http`, a `PATH` command that drops to the user; caller's environment beats the
+  file), plus `setup-arcade.sh`, which installs this and mcp-server-pixelcade from GitHub (e.g. through
+  `pct exec`), then enables and restarts both services. Keep it in step with mcp-server-pixelcade's.
+  Over HTTP the server is the only gate in front of the cabinet (its APIs have no auth): Access settings
+  go in the env file, never `--insecure-no-auth` in the service. CI runs setup-arcade.sh with this repo
+  at the commit under test and mcp-server-pixelcade at its same-named branch (put changes to both kits on
+  one), else main, each pinned to a commit up front (`ARCADE_REF_BATOCERA`, `ARCADE_REF_PIXELCADE`) so a
+  twin PR merging mid-run, which deletes its branch, can't break the job.
 - `playtracker/playtracker.py`: runs **on the cabinet**, stdlib only (no pip on Batocera), single file.
   `Tracker` (pure session logic), a minimal MQTT 3.1.1 QoS 1 publisher, and an outbox for broker outages
 - `tests/`: `conftest.py` (a `FakeCabinet` per test, on free ports), `test_tools` (in-process MCP `Client`,
   dry run, faults), `test_cli`, `test_assumptions` (registry vs code vs docs), `test_units`, `test_logsafe`,
-  `test_playtracker` (loaded from its file path; `FakeBroker` speaks enough MQTT), `test_stdio`, `test_probe`.
+  `test_playtracker` (loaded from its file path; `FakeBroker` speaks enough MQTT), `test_stdio`, `test_probe`,
+  `test_remote` (shared: the transport), `test_http_tools` (these tools over HTTP with signed Access assertions).
   Async tests use anyio's plugin.
 
 ## Rules for changes
@@ -92,7 +97,7 @@ From batocera-emulationstation (`es-app/src/services/HttpServerThread.cpp`, `Htt
 
 ```sh
 pip install -e ".[dev]" && pytest && ruff check . && ruff format --check . && mypy
-mcp-server-batocera doctor [--json | --verbose] | simulate [--write-config DIR] | call <tool> k=v [--dry-run] | (serve [--dry-run])
+mcp-server-batocera doctor [--json | --verbose] | simulate [--write-config DIR] | call <tool> k=v [--dry-run] | (serve [--dry-run] [--http])
 ```
 
 Real hardware: `doctor`, then HARDWARE_VALIDATION.md. Record results in `assumptions.py` (status + note)

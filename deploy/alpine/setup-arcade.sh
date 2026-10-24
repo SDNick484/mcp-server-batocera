@@ -1,6 +1,7 @@
 #!/bin/sh
 # setup-arcade.sh: install the arcade's MCP servers, mcp-server-batocera and mcp-server-pixelcade,
-# for command-line use on an Alpine machine on the cabinet's LAN (e.g. a Proxmox LXC), in one go.
+# as OpenRC services (Streamable HTTP) on an Alpine machine on the cabinet's LAN (e.g. a Proxmox
+# LXC), in one go.
 # Run as root on that machine; from elsewhere, through the Proxmox host:
 #
 #   ssh root@<proxmox host> "pct exec <container id> -- env ARCADE_HOST=<cabinet IP> sh -s" < setup-arcade.sh
@@ -17,7 +18,10 @@
 #
 # Each repo is checked out in /srv/src/mcp-server-<name> (the layout the sibling servers deploy
 # from) and installed by its own deploy/alpine/install.sh. Safe to re-run: it updates the code and
-# keeps the settings. It ends with each server's doctor, which reads but changes nothing.
+# keeps the settings. Then each server's doctor, which reads but changes nothing, and each service
+# is enabled at boot and restarted (a running server keeps the old code until it restarts). With
+# no Cloudflare Access settings in its env file yet, a service listens on 127.0.0.1 and serves only
+# this machine, so starting it before Cloudflare is set up exposes nothing.
 set -eu
 
 HOST="${ARCADE_HOST:-}"
@@ -86,6 +90,40 @@ if [ -n "$problems" ]; then
 else
 	say "Every server reaches the cabinet."
 fi
+
+for s in $SERVERS; do
+	say "mcp-server-$s service"
+	case "$s" in
+	batocera) default_port=8717 ;;
+	pixelcade) default_port=8718 ;;
+	esac
+	setting() { sed -n "s/^$1=\\([^ #]*\\).*/\\1/p" "/etc/mcp-server-$s/env" | tail -n 1 | tr -d "\"'"; }
+	port=$(setting MCP_HTTP_PORT)
+	port="${port:-$default_port}"
+	host=$(setting MCP_HTTP_BIND)
+	case "$host" in
+	'' | 0.0.0.0) host=127.0.0.1 ;; # every interface includes loopback
+	:: ) host='[::1]' ;;
+	*:*) host="[$host]" ;;          # an IPv6 address needs brackets in a URL
+	esac
+	rc-update add "mcp-server-$s" default >/dev/null
+	ok=no
+	if rc-service "mcp-server-$s" restart; then
+		# /healthz answers before any auth, so this works with or without Access configured.
+		for _ in $(seq 50); do
+			if wget -q -O /dev/null "http://$host:$port/healthz" 2>/dev/null; then ok=yes && break; fi
+			sleep 0.2
+		done
+	fi
+	if [ "$ok" = yes ]; then
+		echo "mcp-server-$s is running and answers on $host:$port (enabled at boot)."
+	else
+		echo "mcp-server-$s didn't come up on $host:$port. The end of its log:" >&2
+		tail -n 20 "/var/log/mcp-server-$s/server.log" >&2 2>/dev/null || true
+		problems="$problems $s-service"
+	fi
+done
+[ -z "$problems" ] || say "Problems:$problems"
 echo "Run them from any shell here: mcp-server-batocera call get_status, mcp-server-pixelcade call get_status."
 case ":$PATH:" in
 *:/usr/local/bin:*) ;;

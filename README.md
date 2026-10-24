@@ -32,24 +32,28 @@ Home Assistant ◀──MQTT :1883── playtracker.py ◀── EmulationStati
 - **playtracker** runs on the cabinet on every EmulationStation event and publishes to Home Assistant's
   Mosquitto broker. Nothing extra has to run on Batocera; it uses only Python's standard library.
 
-## Local only: stdio, on your LAN
+## Remote access: stdio, or HTTP behind Cloudflare Access
 
-This server is meant to run on your LAN, launched over **stdio** by Claude Code or Claude Desktop on a
-machine that can reach the cabinet. Unlike its AV siblings (Onkyo, Shield TV, Harmony, Sofabaton, webOS),
-it has no HTTP transport and isn't published through a Cloudflare Tunnel, so it isn't reachable from
-claude.ai or the Claude mobile app. That's on purpose:
+There are two ways to run it:
 
-- **The cabinet's APIs have no authentication.** EmulationStation's web API and RetroArch's network
-  commands trust anything that can reach them. A remotely reachable server that drives them would put
-  launching and quitting games, and save-state loads, behind whatever protects the server, not the cabinet.
-- **It's a single-room device.** Starting a game is only useful to someone standing at the cabinet.
+- **stdio**: Claude Code or Claude Desktop launches it on a machine on the cabinet's LAN.
+- **`serve --http`**: Streamable HTTP on `127.0.0.1:8717/batocera/mcp`, as a long-lived service (see
+  [Service and Cloudflare](#service-and-cloudflare)). Published through a Cloudflare Tunnel with Cloudflare
+  Access in front, it's one URL you add as a connector in Claude Code, Claude Desktop and the mobile app.
 
-So it takes the code it shares with its siblings from
-[mcp-server-shared](https://github.com/SDNick484/mcp-server-shared) but excludes the `remote` module (the
-Streamable HTTP transport behind Cloudflare Access) in [`shared.lock`](shared.lock). If you ever want remote
-access, that's the place to start: drop the exclusion, add a `serve --http` mode like
-[mcp-server-misterfpga](https://github.com/SDNick484/mcp-server-misterfpga)'s, and put a Cloudflare Access
-application in front of it. Don't expose ports 1234 or 55355 directly.
+The HTTP transport is `remote.py`, shared byte for byte with the AV siblings (Onkyo, Shield TV, Harmony,
+Sofabaton, webOS) through [mcp-server-shared](https://github.com/SDNick484/mcp-server-shared). The cabinet's
+own APIs have **no authentication**: EmulationStation's web API and RetroArch's network commands trust
+anything that can reach them. So the server is the gate, and it doesn't rely on Cloudflare's edge alone:
+
+- **With Access configured, every request needs a valid Access assertion**, checked here: signature
+  (Access's published keys), the application's audience tag, issuer, expiry, and `MCP_ALLOWED_EMAILS` if
+  set. Anything else gets a plain 403, so a request that reaches the port from the LAN, around the tunnel,
+  is refused too.
+- **Without Access, it serves only the machine it runs on.** It won't listen on anything but loopback,
+  won't start with a `--public-host`, and answers 403 to anything a tunnel or proxy forwarded.
+  `--insecure-no-auth` turns that off for a short trusted-LAN test; don't run the service with it.
+- **Never expose ports 1234 or 55355 themselves.** Only this server's port goes through the tunnel.
 
 ## Cabinet setup
 
@@ -119,12 +123,11 @@ paths are there to try. The tests use the same simulator.
 
 ### On Alpine (e.g. a Proxmox LXC)
 
-`deploy/alpine/` installs it to run from the command line on an always-on Alpine machine on the
-cabinet's LAN: a venv in `/opt/mcp-server-batocera`, a `mcp-batocera` system user, every setting in
-`/etc/mcp-server-batocera/env`, and `mcp-server-batocera` on `PATH`, which runs as that user with those
-settings. Nothing listens on a port, which keeps it [local only](#local-only-stdio-on-your-lan): you
-run `doctor` and `call` over SSH. The layout matches the sibling servers' `deploy/alpine/`, so an OpenRC
-service could be added later without moving anything.
+`deploy/alpine/` installs it on an always-on Alpine machine on the cabinet's LAN, in the sibling
+servers' `deploy/alpine/` layout so they can share an LXC: a venv in `/opt/mcp-server-batocera`, a
+`mcp-batocera` system user, every setting in `/etc/mcp-server-batocera/env`, an OpenRC service
+(`/etc/init.d/mcp-server-batocera`), and `mcp-server-batocera` on `PATH`, which runs as that user with
+those settings, for `doctor` and `call` from a shell.
 
 ```sh
 git clone https://github.com/SDNick484/mcp-server-batocera.git && cd mcp-server-batocera
@@ -132,6 +135,7 @@ sh deploy/alpine/install.sh                                # as root; re-run to 
 vim /etc/mcp-server-batocera/env                           # BATOCERA_URL=<the cabinet's IP>
 mcp-server-batocera doctor
 mcp-server-batocera call find_games query=mario
+rc-update add mcp-server-batocera default && rc-service mcp-server-batocera start
 ```
 
 A variable set in your shell beats the env file, so one-off overrides work as usual
@@ -139,8 +143,9 @@ A variable set in your shell beats the env file, so one-off overrides work as us
 
 **Both arcade servers at once.** `deploy/alpine/setup-arcade.sh` installs this server and
 [mcp-server-pixelcade](https://github.com/SDNick484/mcp-server-pixelcade) from GitHub into
-`/srv/src/`, points both at the cabinet, and runs both doctors. Run it as root on the Alpine machine,
-or from elsewhere through the Proxmox host:
+`/srv/src/`, points both at the cabinet, runs both doctors, then enables both services at boot and
+restarts them (so a re-run's new code is the code that runs). Run it as root on the Alpine machine, or
+from elsewhere through the Proxmox host:
 
 ```sh
 ssh root@<proxmox host> "pct exec <container id> -- env ARCADE_HOST=<cabinet IP> sh -s" < deploy/alpine/setup-arcade.sh
@@ -149,7 +154,35 @@ ssh root@<proxmox host> "pct exec <container id> -- env ARCADE_HOST=<cabinet IP>
 `ARCADE_REF` picks a branch, tag or commit (default `main`), and `ARCADE_REF_BATOCERA` or
 `ARCADE_REF_PIXELCADE` one server's ref instead; re-running updates the code and keeps the settings. CI runs `deploy/alpine/smoke-test.sh` in a stock `python:3.12-alpine` container: install,
 upgrade, the test suite on musl, `doctor` and `call` through the command on `PATH` against the
-simulator, and `setup-arcade.sh` itself.
+simulator, the OpenRC service (as its user, an MCP call over HTTP, Access settings from the env file),
+and `setup-arcade.sh` itself.
+
+### Service and Cloudflare
+
+The service runs `/opt/mcp-server-batocera/run.sh serve --http` under `supervise-daemon` (restarted if it
+exits) as `mcp-batocera`, logging to `/var/log/mcp-server-batocera/server.log`. Its settings are the
+`MCP_HTTP_*`, `MCP_PUBLIC_HOSTS` and `CF_ACCESS_*` lines in `/etc/mcp-server-batocera/env`:
+
+| Flag | Variable | Default |
+| --- | --- | --- |
+| `--bind` | `MCP_HTTP_BIND` | `127.0.0.1` |
+| `--port` | `MCP_HTTP_PORT` | `8717` (the siblings use 8711 to 8716, Pixelcade 8718) |
+| `--path` | `MCP_HTTP_PATH` | `/batocera/mcp` |
+| `--public-host` | `MCP_PUBLIC_HOSTS` | none: only loopback Host headers pass |
+| | `CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD` | none: serves only this machine |
+| | `MCP_ALLOWED_EMAILS` | anyone Access lets in |
+
+To use it as a connector, with cloudflared running on the same machine (keep the `127.0.0.1` bind):
+
+1. **Tunnel route:** a public hostname, say `mcp.example.com`, path `batocera/*`, to
+   `http://localhost:8717`. Several servers can share the hostname, one path each.
+2. **Access application** (self-hosted) covering that hostname and path, with a policy for who may use it
+   and Managed OAuth turned on, so Claude's connector can sign in through Access. Note its AUD tag.
+3. **The env file:** `MCP_PUBLIC_HOSTS=mcp.example.com`, `CF_ACCESS_TEAM_DOMAIN=<team>.cloudflareaccess.com`,
+   `CF_ACCESS_AUD=<the AUD tag>`, then `rc-service mcp-server-batocera restart`.
+4. **The connector:** `https://mcp.example.com/batocera/mcp`.
+
+`GET /healthz` answers without auth, for monitoring. Details are in `src/batocera_mcp/remote.py`.
 
 ## Tools
 
@@ -196,6 +229,9 @@ saying what to fix.
   plus `SHOW_MSG` with validated single-line text.
 - Every tool has a title and MCP annotations. Errors say what to do ("turn on public web access",
   "add `global.retroarch.network_cmd_enable=true`"), and logs go to stderr.
+- **Over HTTP, the server is the gate** (the cabinet's APIs have none): Access assertions are checked on
+  every request, and without Access it serves only its own machine. See
+  [Remote access](#remote-access-stdio-or-http-behind-cloudflare-access).
 
 ## Play tracking in Home Assistant (playtracker)
 
@@ -308,7 +344,7 @@ timing or versions; *low* means our own guess. Hardware results are from Batocer
 
 ```sh
 pip install -e ".[dev]"
-pytest              # tools via an in-process MCP client against the simulator, faults, CLI, playtracker, stdio
+pytest              # tools via an in-process MCP client against the simulator, faults, CLI, playtracker, stdio, HTTP + Access
 ruff check . && ruff format --check .
 mypy                # strict, src/ and playtracker/
 ```

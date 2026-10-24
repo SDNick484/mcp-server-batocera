@@ -1,9 +1,11 @@
 #!/bin/sh
 # CI: install in a stock python:3.12-alpine container and drive the command on PATH
-# against the simulator. Proves the dependencies install on musl, re-running
-# upgrades the code, the layout and file modes, that the command drops to user
-# mcp-batocera, that it picks up /etc/mcp-server-batocera/env, and that the
-# caller's environment beats that file.
+# and the OpenRC service against the simulator. Proves the dependencies install on
+# musl, re-running upgrades the code, the layout and file modes, that the command
+# drops to user mcp-batocera, that it picks up /etc/mcp-server-batocera/env, that the
+# caller's environment beats that file, that OpenRC runs the service as the user, that
+# an MCP call over HTTP reaches the cabinet, and that Access settings in the env file
+# turn the Access check on.
 #   docker run --rm -v "$PWD:/src" -w /src python:3.12-alpine sh deploy/alpine/smoke-test.sh
 set -eux
 
@@ -18,6 +20,7 @@ report() {
 trap report EXIT
 
 STEP='install'
+apk add --no-cache curl >/dev/null
 sh deploy/alpine/install.sh /src
 
 STEP='upgrade'
@@ -44,6 +47,8 @@ STEP='file modes'
 [ "$(stat -c '%a %U:%G' $ETC/env)" = "640 root:mcp-batocera" ]
 [ "$(stat -c '%a %U' $STATE)" = "700 mcp-batocera" ]
 [ "$(command -v mcp-server-batocera)" = /usr/local/bin/mcp-server-batocera ]
+[ "$(stat -c '%a %U' /var/log/mcp-server-batocera)" = "750 mcp-batocera" ]
+[ -x /etc/init.d/mcp-server-batocera ]
 
 STEP='simulator, as the user'
 # Started through the command on PATH: the config it writes must belong to mcp-batocera.
@@ -70,6 +75,55 @@ echo "$out" | grep -q '"outcome": "dry_run"'
 STEP='run as the user directly'
 su-exec mcp-batocera mcp-server-batocera call get_status | grep -q '"reachable": true'
 
+STEP='service start'
+# OpenRC in a container: it needs to believe it has booted, and that the
+# network (which the service `need`s) is provided by the host
+printf 'rc_sys="docker"\nrc_provide="loopback net"\n' >>/etc/rc.conf
+mkdir -p /run/openrc && touch /run/openrc/softlevel
+STEP_LOG=/var/log/mcp-server-batocera/server.log
+rc-service mcp-server-batocera start
+for _ in $(seq 50); do curl -fsS http://127.0.0.1:8717/healthz && break; sleep 0.2; done
+rc-service mcp-server-batocera status
+
+STEP='service user'
+# The process runs as the service user, not root. (busybox ps truncates user
+# names to 8 characters, so ask /proc for the owner of the server's process.)
+# shellcheck disable=SC2009
+pid=$(ps -o pid,args | grep '[m]cp-server-batocera serve --http' | awk 'NR==1 {print $1}')
+[ -n "$pid" ] && [ "$(stat -c %U "/proc/$pid")" = mcp-batocera ]
+
+STEP='mcp over http'
+# A real MCP session against the service: initialize, then get_status, which must
+# reach the simulated cabinet (structuredContent is compact JSON: no spaces).
+URL=http://127.0.0.1:8717/batocera/mcp
+H='-H Content-Type:application/json -H Accept:application/json,text/event-stream'
+# shellcheck disable=SC2086
+SID=$(curl -fsS -D - -o /dev/null $H "$URL" -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
+	| tr -d '\r' | awk -F': ' 'tolower($1)=="mcp-session-id" {print $2}')
+[ -n "$SID" ]
+# shellcheck disable=SC2086
+curl -fsS $H -H "mcp-session-id: $SID" "$URL" -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' >/dev/null
+# shellcheck disable=SC2086
+out=$(curl -fsS $H -H "mcp-session-id: $SID" "$URL" -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_status","arguments":{}}}')
+echo "$out" | tail -c 600
+echo "$out" | grep -q '"reachable":true'
+
+STEP='access from the env file'
+# With CF_ACCESS_* in the env file, a request without an Access assertion is refused
+# (nothing here can sign one: tests/test_http_tools.py covers valid ones), and the
+# health check still answers, before auth.
+cat >>$ETC/env <<'ENV'
+MCP_PUBLIC_HOSTS=mcp.example.com
+CF_ACCESS_TEAM_DOMAIN=example.cloudflareaccess.com
+CF_ACCESS_AUD=smoke-test-aud
+ENV
+rc-service mcp-server-batocera restart
+for _ in $(seq 50); do curl -fsS http://127.0.0.1:8717/healthz && break; sleep 0.2; done
+# shellcheck disable=SC2086
+code=$(curl -sS -o /dev/null -w '%{http_code}' $H "$URL" -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')
+[ "$code" = 403 ]
+STEP_LOG=''
+
 STEP='setup-arcade.sh'
 # Both servers from GitHub, as on a real container. CI pins each to a commit (ARCADE_REF_BATOCERA:
 # the commit under test; ARCADE_REF_PIXELCADE: its same-named branch's tip, else main's). The
@@ -88,6 +142,12 @@ if [ -n "${ARCADE_REF:-}" ]; then
 	grep -q '^PIXELCADE_URL=127.0.0.1$' /etc/mcp-server-pixelcade/env
 	grep -q 'doctor found problems for: pixelcade$' "$STEP_LOG"
 	mcp-server-pixelcade --version
+	# Both services enabled at boot and answering (Batocera's still with the Access settings above)
+	grep -q 'mcp-server-batocera is running and answers on 127.0.0.1:8717' "$STEP_LOG"
+	grep -q 'mcp-server-pixelcade is running and answers on 127.0.0.1:8718' "$STEP_LOG"
+	rc-update show default | grep -q 'mcp-server-batocera'
+	rc-update show default | grep -q 'mcp-server-pixelcade'
+	curl -fsS http://127.0.0.1:8718/healthz
 	checked_out batocera "${ARCADE_REF_BATOCERA:-$ARCADE_REF}"
 	checked_out pixelcade "${ARCADE_REF_PIXELCADE:-$ARCADE_REF}"
 	ARCADE_HOST='127.0.0.1;reboot' sh /src/deploy/alpine/setup-arcade.sh 2>&1 | grep -q 'should be an IP address'
@@ -101,4 +161,6 @@ if [ -n "${ARCADE_REF:-}" ]; then
 		grep -q "mcp-server-pixelcade has no branch, tag or commit 'no-such-ref-here' (ARCADE_REF_PIXELCADE)"
 fi
 
+rc-service mcp-server-batocera stop
+if [ -e /etc/init.d/mcp-server-pixelcade ]; then rc-service mcp-server-pixelcade stop; fi  # setup-arcade.sh started it
 echo "Alpine smoke test passed"
