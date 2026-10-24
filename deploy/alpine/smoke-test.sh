@@ -71,10 +71,15 @@ STEP='run as the user directly'
 su-exec mcp-batocera mcp-server-batocera call get_status | grep -q '"reachable": true'
 
 STEP='setup-arcade.sh'
-# Both servers from GitHub at ARCADE_REF, as on a real container. CI passes the PR's branch when
-# mcp-server-pixelcade has one of the same name, otherwise main. The simulated cabinet answers on the
-# standard port at 127.0.0.1; nothing plays pixelweb, so Pixelcade's doctor is expected to fail and
-# the script to say so without stopping.
+# Both servers from GitHub, as on a real container. CI pins each to a commit (ARCADE_REF_BATOCERA:
+# the commit under test; ARCADE_REF_PIXELCADE: its same-named branch's tip, else main's). The
+# simulated cabinet answers on the standard port at 127.0.0.1; nothing plays pixelweb, so
+# Pixelcade's doctor is expected to fail and the script to say so without stopping.
+checked_out() { # server, ref: that server's checkout is at that ref (a branch means the remote's)
+	d="/srv/src/mcp-server-$1"
+	want=$(git -C "$d" rev-parse -q --verify "origin/$2^{commit}" || git -C "$d" rev-parse -q --verify "$2^{commit}")
+	[ "$(git -C "$d" rev-parse HEAD)" = "$want" ]
+}
 if [ -n "${ARCADE_REF:-}" ]; then
 	STEP_LOG=/tmp/setup-arcade.log
 	ARCADE_HOST=127.0.0.1 sh /src/deploy/alpine/setup-arcade.sh >"$STEP_LOG" 2>&1 || { cat "$STEP_LOG"; false; }
@@ -83,8 +88,17 @@ if [ -n "${ARCADE_REF:-}" ]; then
 	grep -q '^PIXELCADE_URL=127.0.0.1$' /etc/mcp-server-pixelcade/env
 	grep -q 'doctor found problems for: pixelcade$' "$STEP_LOG"
 	mcp-server-pixelcade --version
+	checked_out batocera "${ARCADE_REF_BATOCERA:-$ARCADE_REF}"
+	checked_out pixelcade "${ARCADE_REF_PIXELCADE:-$ARCADE_REF}"
 	ARCADE_HOST='127.0.0.1;reboot' sh /src/deploy/alpine/setup-arcade.sh 2>&1 | grep -q 'should be an IP address'
-	ARCADE_REF=no-such-ref-here sh /src/deploy/alpine/setup-arcade.sh 2>&1 | grep -q "has no branch, tag or commit 'no-such-ref-here'"
+	# A ref that isn't there stops it, naming the setting it came from. The pins are unset so
+	# ARCADE_REF applies; ARCADE_SERVERS=pixelcade skips a slow reinstall of this server.
+	(
+		unset ARCADE_REF_BATOCERA ARCADE_REF_PIXELCADE
+		ARCADE_REF=no-such-ref-here sh /src/deploy/alpine/setup-arcade.sh 2>&1
+	) | grep -q "has no branch, tag or commit 'no-such-ref-here' (ARCADE_REF)"
+	ARCADE_SERVERS=pixelcade ARCADE_REF_PIXELCADE=no-such-ref-here sh /src/deploy/alpine/setup-arcade.sh 2>&1 |
+		grep -q "mcp-server-pixelcade has no branch, tag or commit 'no-such-ref-here' (ARCADE_REF_PIXELCADE)"
 fi
 
 echo "Alpine smoke test passed"
