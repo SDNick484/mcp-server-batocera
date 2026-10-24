@@ -24,6 +24,7 @@ reasoning behind non-obvious changes instead of only making them.
 - `src/batocera_mcp/logsafe.py`, `tasks.py`, `ratelimit.py` (and their tests): shared with the sibling
   servers, synced from `mcp-server-shared` by `scripts/sync_shared.py` at the commit in `shared.lock`.
   `tasks.py` and `ratelimit.py` aren't used here yet. `remote.py` is excluded: this server is LAN-only.
+- `src/batocera_mcp/probe.py`: stdlib-only probe for EmulationStation's HTTP pool size (B-ES-THREADS)
 - `src/batocera_mcp/cli.py`: `serve` (default), `doctor` (`check`), `simulate`, `call`
 - `deploy/alpine/`: command-line install on Alpine (venv, `mcp-batocera` user, `/etc/.../env`, a `PATH`
   command that drops to the user; caller's environment beats the file), plus `setup-arcade.sh`, which
@@ -36,7 +37,7 @@ reasoning behind non-obvious changes instead of only making them.
   `Tracker` (pure session logic), a minimal MQTT 3.1.1 QoS 1 publisher, and an outbox for broker outages
 - `tests/`: `conftest.py` (a `FakeCabinet` per test, on free ports), `test_tools` (in-process MCP `Client`,
   dry run, faults), `test_cli`, `test_assumptions` (registry vs code vs docs), `test_units`, `test_logsafe`,
-  `test_playtracker` (loaded from its file path; `FakeBroker` speaks enough MQTT), `test_stdio`.
+  `test_playtracker` (loaded from its file path; `FakeBroker` speaks enough MQTT), `test_stdio`, `test_probe`.
   Async tests use anyio's plugin.
 
 ## Rules for changes
@@ -64,14 +65,16 @@ reasoning behind non-obvious changes instead of only making them.
 The authoritative list, with ids and status, is `assumptions.py`; this is the readable summary.
 From batocera-emulationstation (`es-app/src/services/HttpServerThread.cpp`, `HttpApi.cpp`,
 `SystemScreenSaver.cpp`, `FileData.cpp`, `es-core/src/Scripting.cpp`) and batocera.linux
-(`python-src/batocera-launch-libretro/.../emulator.py`), read 2026-10. **Not yet verified on hardware.**
+(`python-src/batocera-launch-libretro/.../emulator.py`), read 2026-10. All verified on Batocera 43 (2026-10-21 to 24).
 - Non-127.0.0.1 clients get 403 unless `PublicWebAccess`; with it, ES listens on 0.0.0.0:1234.
 - `/runningGame` answers 201 `{"msg":"NO GAME RUNNING"}` when idle. `/isIdle` 200 `[ true ]` / 201.
 - `POST /launch` body = ROM path; it answers 200 even for unknown paths, so confirm via `/runningGame`.
   It calls `cancelScreenSaver()` first.
 - Game id = md5(path). Metadata values are strings; times look like `20261009T201500`; `gametime` is
   seconds. `/systems` includes collections and group systems (filtered by `is_game_system`).
-- The HTTP server uses a 2-thread pool; `find_games` loads systems with concurrency 2.
+- The HTTP server (cpp-httplib) has a fixed pool of max(8, cores - 1) threads on Batocera 43 (later ES: 2
+  growing to that); an idle connection holds a thread for 5 s. `find_games` loads 2 systems at a time anyway.
+  `python -m batocera_mcp.probe` measures the pool.
 - Screensaver types: dim, black, random video, slideshow, suspend. None launch games. Random video and
   slideshow fire `game-selected` (system, path, name) per item. With `ScreenSaverControls`, START launches
   the shown game: `cancelScreenSaver()` (fires `screensaver-stop`) then `game-start`. Scripts run async,

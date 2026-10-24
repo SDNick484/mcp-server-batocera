@@ -264,7 +264,7 @@ sensor:
 ```
 
 If the broker is unreachable (Home Assistant restarting, say), messages are queued in `/tmp/playtracker`
-and sent with the next event. `/tmp` is cleared on reboot. If the cabinet loses power, `status` stays
+and sent with the next event. `/tmp` is a tmpfs, emptied by any restart. If the cabinet loses power, `status` stays
 `online` until it next boots, because the script doesn't keep a connection open for an MQTT last will.
 
 ## Verification status
@@ -273,7 +273,7 @@ Every Batocera behavior the code relies on is listed in `src/batocera_mcp/assump
 source and how sure we are; the code cites each id where it depends on it, and
 [HARDWARE_VALIDATION.md](HARDWARE_VALIDATION.md) has the step that confirms it. *high* means read
 directly in the code that implements it; *medium* means read in source but dependent on settings,
-timing or versions; *low* means our own guess. Hardware results so far are from Batocera 43 (2026-10-21).
+timing or versions; *low* means our own guess. Hardware results are from Batocera 43 (2026-10-21 to 2026-10-24); every assumption is now confirmed.
 
 | Assumption | Confidence | Status |
 |---|---|---|
@@ -285,7 +285,7 @@ timing or versions; *low* means our own guess. Hardware results so far are from 
 | `B-ES-GAME-ID` | high | hardware-verified |
 | `B-ES-METADATA` | high | hardware-verified |
 | `B-ES-SYSTEMS` | high | hardware-verified |
-| `B-ES-THREADS` | medium | simulator-only |
+| `B-ES-THREADS` | high | hardware-verified |
 | `B-ES-MESSAGES` | medium | hardware-verified |
 | `B-RA-ENABLE` | medium | hardware-verified |
 | `B-RA-STATUS` | medium | hardware-verified |
@@ -294,7 +294,7 @@ timing or versions; *low* means our own guess. Hardware results so far are from 
 | `B-PT-GAME-ARGS` | high | hardware-verified |
 | `B-PT-SCREENSAVER` | high | hardware-verified |
 | `B-PT-SCREENSAVER-START` | medium | hardware-verified |
-| `B-PT-TMP` | medium | simulator-only |
+| `B-PT-TMP` | medium | hardware-verified |
 | `B-PT-HA-MQTT` | high | hardware-verified |
 
 ## Not yet included

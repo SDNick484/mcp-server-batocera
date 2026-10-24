@@ -34,6 +34,7 @@ HTTP = f"{ES} es-app/src/services/HttpServerThread.cpp"
 
 SEEN = "Seen 2026-10-21 on Batocera 43 (ES 43couv.1) from a Proxmox LXC: "
 SEEN_PT = "Seen 2026-10-22 on Batocera 43 with Home Assistant's Mosquitto add-on: "
+SEEN_24 = "Seen 2026-10-24 on Batocera 43, on the cabinet over SSH: "
 
 
 @dataclass(frozen=True)
@@ -134,11 +135,18 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
     ),
     Assumption(
         "B-ES-THREADS",
-        "The HTTP server runs a 2-thread pool, so the server loads at most 2 game lists at a time.",
-        f"{HTTP} new_task_queue",
-        "medium",
-        note="A courtesy limit: more parallel requests would queue, not fail. Not observable directly; on hardware, "
-        "find_games across 32 systems (3,000+ games, cold cache) took about 1 s.",
+        "The HTTP server hands each connection to a fixed pool of max(8, cores - 1) threads (cpp-httplib's "
+        "default), and a connection that sends nothing holds its thread for the 5 s read timeout. The server "
+        "loads at most 2 game lists at a time, a courtesy that leaves most of the pool to other clients.",
+        f"{HTTP} at batocera.linux 43's pinned commit 68f45afb (no new_task_queue, so httplib.h's "
+        "ThreadPool(CPPHTTPLIB_THREAD_POOL_COUNT)); ES master since 7cc47355 (2026-08-19) uses ThreadPool(2, "
+        "CPPHTTPLIB_THREAD_POOL_COUNT): 2 threads growing to the same maximum when busy",
+        "high",
+        status="hardware-verified",
+        note=SEEN_24 + "nproc 4, and batocera_mcp.probe answered at once with up to 7 idle connections held and "
+        "stalled 4.7 s (the read timeout, less the probe's 0.3 s settle) with 8: a pool of 8, max(8, 4 - 1). "
+        "Corrected 2026-10-23 from a 2-thread pool, read from ES master's ThreadPool(2, ...), which Batocera 43 "
+        "doesn't have. find_games across 32 systems (3,000+ games, cold cache) took about 1 s at 2 at a time.",
     ),
     Assumption(
         "B-ES-MESSAGES",
@@ -230,10 +238,13 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
     ),
     Assumption(
         "B-PT-TMP",
-        "/tmp is cleared on reboot, so playtracker re-announces itself to Home Assistant once per boot.",
+        "/tmp is a tmpfs, emptied by any restart, so after a power cut or crash (when no quit, reboot or shutdown "
+        "event ran to delete it) playtracker's announced marker is gone and it re-announces to Home Assistant.",
         "Batocera mounts /tmp as tmpfs",
         "medium",
-        note="Standard on Batocera images; not checked on this cabinet.",
+        status="hardware-verified",
+        note=SEEN_24 + "stat -f -c %T /tmp printed tmpfs. A clean reboot wouldn't have shown this: playtracker "
+        "deletes the marker itself on reboot, shutdown and quit, so the tmpfs only matters after a power cut.",
     ),
     Assumption(
         "B-PT-HA-MQTT",
