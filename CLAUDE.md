@@ -87,7 +87,7 @@ From batocera-emulationstation (`es-app/src/services/HttpServerThread.cpp`, `Htt
 
 ```sh
 pip install -e ".[dev]" && pytest && ruff check . && ruff format --check . && mypy
-mcp-server-batocera doctor [--json] | simulate [--write-config DIR] | call <tool> k=v [--dry-run] | (serve [--dry-run])
+mcp-server-batocera doctor [--json | --verbose] | simulate [--write-config DIR] | call <tool> k=v [--dry-run] | (serve [--dry-run])
 ```
 
 Real hardware: `doctor`, then HARDWARE_VALIDATION.md. Record results in `assumptions.py` (status + note)

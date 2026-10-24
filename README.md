@@ -77,7 +77,10 @@ BATOCERA_URL=192.168.1.20 mcp-server-batocera doctor
 
 `doctor` checks each layer between this machine and the cabinet (TCP, the API, the library, the
 running game, RetroArch), and when one fails, says what it means and which
-[HARDWARE_VALIDATION.md](HARDWARE_VALIDATION.md) step covers it. It changes nothing.
+[HARDWARE_VALIDATION.md](HARDWARE_VALIDATION.md) step covers it. It changes nothing. It ends with the
+[assumptions](#verification-status) that hardware contradicted (listed; the code no longer relies on them) and a
+count of those not yet confirmed; `doctor --verbose` lists those too, and `doctor --json` always includes
+both lists.
 
 ```json
 { "mcpServers": { "batocera": {

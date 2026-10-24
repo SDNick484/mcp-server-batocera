@@ -44,7 +44,7 @@ async def _cmd_doctor(args: argparse.Namespace) -> int:
 
     report = await run_doctor(load_settings(), timeout=args.timeout)
     redacted = not _unredacted(args)
-    print(to_json(report, redacted) if args.json else render(report, redacted))
+    print(to_json(report, redacted) if args.json else render(report, redacted, verbose=args.verbose))
     return 0 if report.ok else 1
 
 
@@ -126,7 +126,8 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--dry-run", action="store_true", help="read the cabinet, change nothing (BATOCERA_DRY_RUN=1)")
     for name in ("doctor", "check"):
         doc = sub.add_parser(name, parents=[common], help="check every layer between here and the cabinet")
-        doc.add_argument("--json", action="store_true")
+        doc.add_argument("--json", action="store_true", help="the full report as JSON (all assumption lists)")
+        doc.add_argument("-v", "--verbose", action="store_true", help="list each not-yet-confirmed assumption")
         doc.add_argument("--timeout", type=float, default=5.0)
     sim = sub.add_parser("simulate", parents=[common], help="run a fake cabinet to try things without one")
     sim.add_argument("--port", type=int, default=0, help="EmulationStation port (default: any free one)")
