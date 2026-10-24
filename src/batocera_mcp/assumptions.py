@@ -253,4 +253,10 @@ BY_ID = {a.id: a for a in ASSUMPTIONS}
 
 
 def unverified() -> list[Assumption]:
-    return [a for a in ASSUMPTIONS if a.status != "hardware-verified"]
+    """Not checked on hardware yet: the code relies on them on the strength of docs or source alone."""
+    return [a for a in ASSUMPTIONS if a.status == "simulator-only"]
+
+
+def contradicted() -> list[Assumption]:
+    """Checked on hardware and found wrong: the code no longer relies on them (see each ``note``)."""
+    return [a for a in ASSUMPTIONS if a.status == "hardware-contradicted"]

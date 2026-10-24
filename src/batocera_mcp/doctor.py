@@ -24,7 +24,7 @@ from dataclasses import asdict, dataclass, field
 from importlib.metadata import PackageNotFoundError, version
 from urllib.parse import urlparse
 
-from .assumptions import unverified
+from .assumptions import contradicted, unverified
 from .client import BatoceraError, EmulationStationClient, is_game_system
 from .config import ES_PORT, Settings
 from .logsafe import redact
@@ -48,7 +48,8 @@ class Report:
     url: str
     dry_run: bool
     checks: list[Check] = field(default_factory=list)
-    unverified_assumptions: list[str] = field(default_factory=list)
+    unverified_assumptions: list[str] = field(default_factory=list)  # status simulator-only
+    contradicted_assumptions: list[str] = field(default_factory=list)  # status hardware-contradicted
 
     @property
     def ok(self) -> bool:
@@ -84,6 +85,7 @@ async def run_doctor(settings: Settings, timeout: float = 5.0) -> Report:
         url=settings.url,
         dry_run=settings.dry_run,
         unverified_assumptions=[f"{a.id}: {a.claim}" for a in unverified()],
+        contradicted_assumptions=[f"{a.id}: {a.claim}" for a in contradicted()],
     )
     add = report.checks.append
     add(Check("config", True, f"EmulationStation at {settings.url}" + (" (dry run)" if settings.dry_run else "")))
@@ -150,7 +152,24 @@ async def run_doctor(settings: Settings, timeout: float = 5.0) -> Report:
     return report
 
 
-def render(report: Report, redacted: bool = True) -> str:
+def _assumption_lines(report: Report, verbose: bool) -> list[str]:
+    """Contradicted ones in full (rare, and each one changed the code); unverified ones as a count unless
+    verbose, since that list only shrinks as hardware checks are recorded and says little run to run."""
+    lines = [""]
+    if report.contradicted_assumptions:
+        lines.append(f"Contradicted on hardware, no longer relied on ({len(report.contradicted_assumptions)}):")
+        lines += [f"   {c}" for c in report.contradicted_assumptions]
+    pending = report.unverified_assumptions
+    if verbose and pending:
+        lines.append(f"Not yet confirmed on hardware ({len(pending)}):")
+        lines += [f"   {u}" for u in pending]
+    else:
+        more = " (doctor --verbose lists them)" if pending else ""
+        lines.append(f"Not yet confirmed on hardware: {len(pending)}{more}")
+    return lines
+
+
+def render(report: Report, redacted: bool = True, verbose: bool = False) -> str:
     lines = ["mcp-server-batocera doctor", ""]
     lines += [f"  {k}: {v}" for k, v in report.versions.items()]
     if report.dry_run:
@@ -160,8 +179,7 @@ def render(report: Report, redacted: bool = True) -> str:
         lines.append(f"   {'ok' if c.ok else 'x '} {c.layer:<10} {c.detail}")
         if c.hint:
             lines.append(f"      -> {c.hint}")
-    lines += ["", f"Not yet confirmed on hardware ({len(report.unverified_assumptions)}):"]
-    lines += [f"   {u}" for u in report.unverified_assumptions]
+    lines += _assumption_lines(report, verbose)
     lines += ["", "OK" if report.ok else "PROBLEMS FOUND"]
     text = "\n".join(lines)
     return redact(text) if redacted else text

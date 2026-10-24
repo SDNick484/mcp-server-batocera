@@ -8,8 +8,8 @@ import json
 import pytest
 
 from batocera_mcp import cli
-from batocera_mcp.assumptions import unverified
-from batocera_mcp.doctor import STEP, run_doctor
+from batocera_mcp.assumptions import contradicted, unverified
+from batocera_mcp.doctor import STEP, Report, render, run_doctor
 
 
 def run(argv: list[str], capsys) -> tuple[int, str, str]:
@@ -30,9 +30,52 @@ def test_doctor_ok(env, capsys):
     code, out, _ = run(["doctor"], capsys)
     assert code == 0 and out.rstrip().endswith("OK")
     assert "ok library    3 systems, 6 games" in out
-    # Any still-unverified assumption, so recording hardware results doesn't break this test.
+    # By default only a count; computed from the registry, so recording results doesn't break this test.
     pending = unverified()
-    assert not pending or ("Not yet confirmed on hardware" in out and pending[0].id in out)
+    if pending:
+        assert f"Not yet confirmed on hardware: {len(pending)} (doctor --verbose lists them)" in out
+        assert f"   {pending[0].id}:" not in out
+    else:
+        assert "Not yet confirmed on hardware: 0\n" in out
+
+
+def test_doctor_verbose_lists_each_unverified_assumption(env, capsys):
+    code, out, _ = run(["doctor", "--verbose"], capsys)
+    assert code == 0 and "--verbose lists them" not in out
+    pending = unverified()
+    assert not pending or (f"Not yet confirmed on hardware ({len(pending)}):" in out and f"   {pending[-1].id}:" in out)
+
+
+def test_doctor_lists_contradicted_assumptions_apart_from_unverified_ones(env, capsys):
+    # A contradicted assumption is known, not pending: it's listed in full and never counted as unconfirmed.
+    assert {a.id for a in contradicted()}.isdisjoint(a.id for a in unverified())
+    code, out, _ = run(["doctor"], capsys)
+    for a in contradicted():
+        assert f"   {a.id}: {a.claim}" in out
+    assert not contradicted() or f"Contradicted on hardware, no longer relied on ({len(contradicted())}):" in out
+
+
+def test_render_shows_contradicted_in_full_and_unverified_as_a_count():
+    # Hand-built, so this covers the contradicted section even while the registry has none.
+    report = Report(
+        {},
+        "http://cabinet",
+        False,
+        unverified_assumptions=["FAKE-1: a", "FAKE-2: b"],
+        contradicted_assumptions=["FAKE-3: c"],
+    )
+    brief = render(report)
+    assert "Contradicted on hardware, no longer relied on (1):\n   FAKE-3: c\n" in brief
+    assert "Not yet confirmed on hardware: 2 (doctor --verbose lists them)" in brief and "FAKE-1" not in brief
+    assert "Not yet confirmed on hardware (2):\n   FAKE-1: a\n   FAKE-2: b\n" in render(report, verbose=True)
+    assert "Contradicted" not in render(Report({}, "http://cabinet", False))
+
+
+def test_doctor_json_keeps_every_assumption(env, capsys):
+    code, out, _ = run(["doctor", "--json"], capsys)
+    body = json.loads(out)
+    assert [s.split(":")[0] for s in body["unverified_assumptions"]] == [a.id for a in unverified()]
+    assert [s.split(":")[0] for s in body["contradicted_assumptions"]] == [a.id for a in contradicted()]
 
 
 def test_doctor_points_at_the_validation_step(env, capsys):
