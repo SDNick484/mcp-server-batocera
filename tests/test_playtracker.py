@@ -68,6 +68,18 @@ def payload(msgs, suffix: str) -> dict:
     return [json.loads(p) for t, p, _ in msgs if t.endswith(suffix)][-1]
 
 
+PLAY_TOPICS = ("now_playing", "last_session", "session")
+
+
+def play(msgs) -> list[str]:
+    """Messages about play (Now playing, the log, session events), as opposed to what's on screen."""
+    return [t for t in topics(msgs) if t in PLAY_TOPICS]
+
+
+def activity(msgs) -> list[str]:
+    return [p for t, p, _ in msgs if t.endswith("/activity")]
+
+
 # --- Discovery ---------------------------------------------------------------------------
 def test_first_event_announces_to_home_assistant(conf, tmp_path, clock):
     msgs = pt.Tracker(conf, pt.State(tmp_path), clock).handle("start", [])
@@ -79,12 +91,25 @@ def test_first_event_announces_to_home_assistant(conf, tmp_path, clock):
         "homeassistant/sensor/game_room/last_session/config",
         "homeassistant/sensor/game_room/last_session_duration/config",
         "homeassistant/event/game_room/game_session/config",
+        "homeassistant/binary_sensor/game_room/screensaver/config",
+        "homeassistant/sensor/game_room/activity/config",
+        "homeassistant/event/game_room/cabinet/config",
     }
     assert all(retain for _, _, retain in disc)
     assert [p for t, p, _ in msgs if t.endswith("/status")] == ["online"]  # announced once, not twice
-    event = json.loads(next(p for t, p, _ in disc if "/event/" in t))
-    assert event["event_types"] == ["session_end"] and event["state_topic"] == "batocera/game_room/session"
-    assert event["device"]["name"] == "Game Room Arcade"
+    cfg = {t.split("/")[-2]: json.loads(p) for t, p, _ in disc}
+    session = cfg["game_session"]
+    assert session["event_types"] == ["session_start", "session_end"]
+    assert session["state_topic"] == "batocera/game_room/session"
+    assert session["device"]["name"] == "Game Room Arcade"
+    assert cfg["cabinet"]["event_types"] == ["start", "wake", "sleep", "quit", "reboot", "shutdown"]
+    assert cfg["activity"]["options"] == ["menu", "screensaver", "playing", "off"]
+    # Activity alone has no availability topic, so "off" shows instead of "unavailable"
+    assert [k for k, c in cfg.items() if "availability_topic" not in c] == ["activity"]
+    # what a fresh boot shows: online, Idle, no screensaver, in the menu, and a start event
+    assert payload(msgs, "/screensaver") == {"active": False}
+    assert activity(msgs) == ["menu"]
+    assert payload(msgs, "/cabinet")["event_type"] == "start"
     # ...and only once per boot
     assert not any(
         t.startswith("homeassistant/") for t, _, _ in pt.Tracker(conf, pt.State(tmp_path), clock).handle("start", [])
@@ -102,10 +127,14 @@ def test_a_played_game_is_logged(tracker, clock):
         SMW_PATH,
         "frontend",
     )
+    start = payload(msgs, "/session")
+    assert (start["event_type"], start["game"], start["source"]) == ("session_start", "Super Mario World", "frontend")
+    assert activity(msgs) == ["playing"]
     clock.t += 25 * 60
     msgs = tracker.handle("game-end", [])
-    assert topics(msgs) == ["now_playing", "last_session", "session"]
+    assert topics(msgs) == ["now_playing", "last_session", "session", "activity"]
     assert payload(msgs, "now_playing") == {"state": "idle"}
+    assert activity(msgs) == ["menu"]
     ev = payload(msgs, "/session")
     assert (ev["event_type"], ev["game"], ev["duration_s"]) == ("session_end", "Super Mario World", 1500)
     assert [r for t, _, r in msgs if t.endswith("/session")] == [False]  # events aren't retained
@@ -114,27 +143,41 @@ def test_a_played_game_is_logged(tracker, clock):
 def test_short_sessions_are_not_logged(tracker, clock):
     tracker.handle("game-start", [PAC_PATH, "pacman", "Pac-Man"])
     clock.t += 20
-    assert topics(tracker.handle("game-end", [])) == ["now_playing"]  # back to idle, nothing logged
+    assert play(tracker.handle("game-end", [])) == ["now_playing"]  # back to idle, nothing logged
 
 
 def test_screensaver_videos_never_log_anything(tracker, clock):
-    tracker.handle("screensaver-start", ["random video"])
+    msgs = tracker.handle("screensaver-start", ["random video"])
+    assert play(msgs) == []
+    assert payload(msgs, "/screensaver") == {"active": True, "type": "random video"}
+    assert activity(msgs) == ["screensaver"]
     for _ in range(5):  # the random-video screensaver selects game after game
         assert tracker.handle("game-selected", ["snes", SMW_PATH, "Super Mario World"]) == []
         clock.t += 30
-    assert tracker.handle("screensaver-stop", []) == []
+    msgs = tracker.handle("screensaver-stop", [])
+    assert play(msgs) == []
+    assert payload(msgs, "/screensaver") == {"active": False}
+    assert activity(msgs) == ["menu"]
 
 
-def test_start_pressed_on_a_screensaver_video_is_ignored(tracker, clock):
+@pytest.mark.parametrize("game_start_first", [True, False])
+def test_start_pressed_on_a_screensaver_video_is_ignored(tracker, clock, game_start_first):
     tracker.handle("screensaver-start", ["random video"])
     tracker.handle("game-selected", ["snes", SMW_PATH, "Super Mario World"])
     clock.t += 3
     # ES fires screensaver-stop and game-start back to back, and runs the scripts concurrently,
-    # so they can arrive in either order. Here game-start arrives first.
-    assert tracker.handle("game-start", [SMW_ESCAPED, "Super Mario World (USA)", "Super Mario World"]) == []
-    tracker.handle("screensaver-stop", [])
+    # so they can arrive in either order.
+    order = [
+        ("game-start", [SMW_ESCAPED, "Super Mario World (USA)", "Super Mario World"]),
+        ("screensaver-stop", []),
+    ]
+    msgs = [m for event, args in (order if game_start_first else order[::-1]) for m in tracker.handle(event, args)]
+    assert play(msgs) == []  # not logged...
+    assert activity(msgs)[-1] == "playing"  # ...but someone is playing, whichever event came last
     clock.t += 600
-    assert tracker.handle("game-end", []) == []
+    msgs = tracker.handle("game-end", [])
+    assert play(msgs) == []
+    assert activity(msgs) == ["menu"]
 
 
 def test_screensaver_launch_counts_when_configured(tracker, clock, conf):
@@ -167,15 +210,69 @@ def test_missing_game_end_is_recovered(tracker, clock):
     tracker.handle("game-start", [PAC_PATH, "pacman", "Pac-Man"])
     clock.t += 300
     msgs = tracker.handle("game-start", [SMW_ESCAPED, "x", "Super Mario World"])
-    assert payload(msgs, "/session")["game"] == "Pac-Man"
+    events = [json.loads(p) for t, p, _ in msgs if t.endswith("/session")]
+    assert [(e["event_type"], e["game"]) for e in events] == [
+        ("session_end", "Pac-Man"),
+        ("session_start", "Super Mario World"),
+    ]
     assert payload(msgs, "now_playing")["game"] == "Super Mario World"
+
+
+@pytest.mark.parametrize("quit_first", [True, False])
+def test_a_reboot_is_reported_once(tracker, clock, quit_first):
+    # ASSUMPTION B-PT-LIFECYCLE: a reboot fires `quit reboot` and then `reboot`, run concurrently.
+    tracker.handle("game-start", [PAC_PATH, "pacman", "Pac-Man"])
+    clock.t += 300
+    order = [("quit", ["reboot"]), ("reboot", [])]
+    msgs = [m for event, args in (order if quit_first else order[::-1]) for m in tracker.handle(event, args)]
+    assert [json.loads(p)["event_type"] for t, p, _ in msgs if t.endswith("/cabinet")] == ["reboot"]
+    assert play(msgs) == ["now_playing", "last_session", "session"]  # the session is closed once
+    assert activity(msgs) == ["off"]
+    assert not any(t.startswith("homeassistant/") for t, _, _ in msgs)  # no re-announce on the way down
+    assert [p for t, p, _ in msgs if t.endswith("/status")][-1] == "offline"
+
+
+def test_a_plain_quit_is_a_quit_event(tracker):
+    msgs = tracker.handle("quit", [])
+    assert payload(msgs, "/cabinet")["event_type"] == "quit"
+    assert topics(msgs) == ["cabinet", "activity", "status"]
+
+
+def test_sleep_and_wake_keep_the_cabinet_online(tracker, clock):
+    # ASSUMPTION B-PT-LIFECYCLE: they're EmulationStation's idle sleep during a dim or black screensaver.
+    tracker.handle("screensaver-start", ["dim"])
+    msgs = tracker.handle("sleep", [])
+    assert topics(msgs) == ["cabinet"]  # just the event: not offline, and Activity stays "screensaver"
+    assert payload(msgs, "/cabinet")["event_type"] == "sleep"
+    msgs = tracker.handle("wake", [])
+    assert play(msgs) == [] and payload(msgs, "/cabinet")["event_type"] == "wake"
+    assert activity(tracker.handle("screensaver-stop", [])) == ["menu"]
+
+
+def test_wake_after_a_launch_doesnt_reset_now_playing(tracker):
+    # An MCP launch during a dim screensaver: ES wakes, then fires game-start, and the wake script can
+    # finish second. It mustn't publish Idle over the game.
+    tracker.handle("game-start", [PAC_PATH, "pacman", "Pac-Man"])
+    msgs = tracker.handle("wake", [])
+    assert play(msgs) == [] and activity(msgs) == []
+
+
+def test_a_restart_closes_a_session_left_open(tracker, clock):
+    tracker.handle("game-start", [PAC_PATH, "pacman", "Pac-Man"])
+    tracker.handle("screensaver-start", ["dim"])  # stale state from before the crash
+    clock.t += 300
+    msgs = tracker.handle("start", [])
+    assert payload(msgs, "/session")["event_type"] == "session_end"
+    assert payload(msgs, "now_playing") == {"state": "idle"}
+    assert payload(msgs, "/screensaver") == {"active": False}
+    assert activity(msgs) == ["menu"]
 
 
 def test_shutdown_closes_the_session_and_goes_offline(tracker, clock):
     tracker.handle("game-start", [PAC_PATH, "pacman", "Pac-Man"])
     clock.t += 300
     msgs = tracker.handle("shutdown", [])
-    assert topics(msgs) == ["now_playing", "last_session", "session", "status"]
+    assert topics(msgs) == ["now_playing", "last_session", "session", "activity", "status"]
     assert msgs[-1][1] == "offline"
 
 
@@ -286,11 +383,20 @@ def test_unreachable_broker_queues_until_the_next_event(conf, tmp_path):
     dead.bind(("127.0.0.1", 0))
     conf["MQTT_PORT"] = str(dead.getsockname()[1])  # bound, not listening: connection refused
     dead.close()
-    msgs = [("t/now_playing", "{}", True), ("t/now_playing", '{"state":"idle"}', True), ("t/session", "{1}", False)]
+    end = json.dumps({"event_type": "session_end", "game": "Pac-Man"})
+    msgs = [
+        ("t/now_playing", "{}", True),
+        ("t/session", json.dumps({"event_type": "session_start", "game": "Pac-Man"}), False),
+        ("t/now_playing", '{"state":"idle"}', True),
+        ("t/session", end, False),
+        ("t/cabinet", json.dumps({"event_type": "shutdown"}), False),
+    ]
     pt.deliver(conf, state, msgs, logs.append)
     queued = state.read("outbox")["messages"]
-    # only the newest retained value per topic is worth keeping; every session event is kept
-    assert [tuple(m) for m in queued] == [("t/now_playing", '{"state":"idle"}', True), ("t/session", "{1}", False)]
+    # only the newest retained value per topic is worth keeping, and of the events only the logged session:
+    # a shutdown event delivered at the next boot would run the shutdown automation then
+    assert [tuple(m) for m in queued] == [("t/now_playing", '{"state":"idle"}', True), ("t/session", end, False)]
+    assert "2 event(s) dropped" in logs[-1]
     b = FakeBroker()
     try:
         conf["MQTT_PORT"] = str(b.port)

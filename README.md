@@ -6,13 +6,15 @@ quit games, put messages on screen, and, while a RetroArch game runs, pause, sav
 screenshots and reset.
 
 The repo also includes **playtracker**, a small hook script for the cabinet that publishes what's being
-played to MQTT with Home Assistant discovery. It doesn't log screensaver activity.
+played to MQTT with Home Assistant discovery, plus what the cabinet is doing (screensaver, menu, playing,
+off) for automations. It doesn't log screensaver activity.
 
 > **Status: early, partly tested on hardware.** Built from Batocera's EmulationStation and RetroArch sources
 > and tested against a wire-level simulator; playtracker is also tested against a real Mosquitto broker.
 > On a real cabinet (Batocera 43), every MCP tool has been checked: `doctor`, the library, launching and
 > quitting, messages, RetroArch and dry run, and playtracker with Home Assistant (sessions, the short-session
-> filter, broker outages, and ignoring the screensaver). See [HARDWARE_VALIDATION.md](HARDWARE_VALIDATION.md) and the
+> filter, broker outages, and ignoring the screensaver). playtracker's cabinet events (Screensaver, Activity,
+> session start, Cabinet) aren't checked on hardware yet. See [HARDWARE_VALIDATION.md](HARDWARE_VALIDATION.md) and the
 > [verification table](#verification-status).
 
 This is not an official Batocera project.
@@ -282,10 +284,24 @@ come out as below. Rename the device and they follow: `DEVICE_NAME=Game Room Arc
 | `sensor.batocera_now_playing_system`    | system name            |                                                      |
 | `sensor.batocera_last_session`          | last game played       | system, rom, started, ended, duration_s              |
 | `sensor.batocera_last_session_length`   | minutes                |                                                      |
-| `event.batocera_game_session`           | fires `session_end`    | game, system, started, ended, duration_s             |
-| availability                            | `batocera/<id>/status` | online/offline (set on start, quit, shutdown, sleep) |
+| `event.batocera_game_session`           | `session_start`, `session_end` | game, system, rom, source, started (+ ended, duration_s at the end) |
+| `binary_sensor.batocera_screensaver`    | on while the screensaver runs | type (dim, black, random video, slideshow, suspend) |
+| `sensor.batocera_activity`              | `menu`, `screensaver`, `playing`, `off` |                                    |
+| `event.batocera_cabinet`                | `start`, `wake`, `sleep`, `quit`, `reboot`, `shutdown` | at          |
+| availability                            | `batocera/<id>/status` | online on start and wake, offline on quit, reboot, shutdown |
 
 Each logged session is one `session_end` event, so it shows up in the logbook, history and automations.
+`session_start` fires as a logged game starts (not for ignored screensaver launches).
+
+**For automations** (lights when a game starts or the screensaver kicks in), use *Activity*. It describes
+what's on screen rather than what's logged: a game launched from the screensaver reads `playing` even when
+it isn't logged. It has no availability topic, so it shows `off` after a quit, reboot or shutdown instead of
+*unavailable*. When START on a screensaver video launches a game, *Activity* can pass through `menu` for a
+moment on its way to `playing` (EmulationStation's two events race), so give such triggers a `for:` of a
+couple of seconds. EmulationStation's `sleep` and `wake` are its idle sleep during a dim or black screensaver,
+not a system suspend, so the cabinet stays online through them, and a reboot or shutdown is one *Cabinet*
+event, not a `quit` as well.
+
 Daily play time:
 
 ```yaml
@@ -300,7 +316,9 @@ sensor:
 ```
 
 If the broker is unreachable (Home Assistant restarting, say), messages are queued in `/tmp/playtracker`
-and sent with the next event. `/tmp` is a tmpfs, emptied by any restart. If the cabinet loses power, `status` stays
+and sent with the next event: the latest value of each entity, and logged sessions. Other events
+(`session_start`, *Cabinet*) are dropped, because a late one would run its automation at the wrong time: a
+shutdown event would arrive at the next boot. `/tmp` is a tmpfs, emptied by any restart. If the cabinet loses power, `status` stays
 `online` until it next boots, because the script doesn't keep a connection open for an MQTT last will.
 
 ## Verification status
@@ -309,7 +327,7 @@ Every Batocera behavior the code relies on is listed in `src/batocera_mcp/assump
 source and how sure we are; the code cites each id where it depends on it, and
 [HARDWARE_VALIDATION.md](HARDWARE_VALIDATION.md) has the step that confirms it. *high* means read
 directly in the code that implements it; *medium* means read in source but dependent on settings,
-timing or versions; *low* means our own guess. Hardware results are from Batocera 43 (2026-10-21 to 2026-10-24); every assumption is now confirmed.
+timing or versions; *low* means our own guess. Hardware results are from Batocera 43 (2026-10-21 to 2026-10-24); every assumption except `B-PT-LIFECYCLE` is confirmed.
 
 | Assumption | Confidence | Status |
 |---|---|---|
@@ -331,6 +349,7 @@ timing or versions; *low* means our own guess. Hardware results are from Batocer
 | `B-PT-SCREENSAVER` | high | hardware-verified |
 | `B-PT-SCREENSAVER-START` | medium | hardware-verified |
 | `B-PT-TMP` | medium | hardware-verified |
+| `B-PT-LIFECYCLE` | high | simulator-only |
 | `B-PT-HA-MQTT` | high | hardware-verified |
 
 ## Not yet included

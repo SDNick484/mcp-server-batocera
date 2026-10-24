@@ -1,11 +1,12 @@
 # Hardware validation (Batocera cabinet)
 
-Every step has run on a real cabinet (Batocera 43: the server on 2026-10-21, playtracker on 2026-10-22,
+Steps 1 to 9 have run on a real cabinet (Batocera 43: the server on 2026-10-21, playtracker on 2026-10-22,
 the pool probe in 2.6 and the /tmp check in 7.4 on 2026-10-24). The server was built from Batocera's
 EmulationStation and RetroArch sources and tested against a wire-level simulator
 (`src/batocera_mcp/sim/fake_cabinet.py`: real HTTP, real UDP). playtracker was also tested against a
 real Mosquitto broker. Each step below depends only on the ones before it and names the assumptions it
-confirms (ids, claims and sources are in `src/batocera_mcp/assumptions.py`).
+confirms (ids, claims and sources are in `src/batocera_mcp/assumptions.py`). Step 10, playtracker's cabinet
+events, is new and hasn't run yet.
 
 Plan on about an hour. `doctor` points at steps 1, 2, 3 and 5 by number, so keep the numbering if you
 edit this file.
@@ -23,6 +24,7 @@ edit this file.
 | playtracker install, Home Assistant discovery | verified on hardware | 7 |
 | playtracker sessions and the short-session filter | verified on hardware | 8 |
 | playtracker ignores screensaver activity | verified on hardware | 9 |
+| playtracker cabinet events (Screensaver, Activity, session start, Cabinet) | verified against simulator only | 10 |
 | Log redaction (shared logsafe.py) | verified on hardware | 1 |
 
 ## Before you start
@@ -144,9 +146,9 @@ Confirms B-PT-SCRIPTS, B-PT-HA-MQTT, B-PT-TMP.
 1. Create the Home Assistant user and copy the files as in the README's *Play tracking* section. Set
    `MIN_SESSION_SECONDS=60`.
 2. Restart EmulationStation (*Quit > Restart EmulationStation*). Over SSH:
-   `cat /tmp/playtracker/playtracker.log`. Expect `start -> 8 message(s)` and no `publish failed`
+   `cat /tmp/playtracker/playtracker.log`. Expect `start -> 14 message(s)` and no `publish failed`
    (B-PT-SCRIPTS). If nothing is logged, check `ls -l` shows `x`, and `which python3`.
-3. In Home Assistant: *Settings > Devices > MQTT*: a device with six entities (B-PT-HA-MQTT).
+3. In Home Assistant: *Settings > Devices > MQTT*: a device with nine entities (B-PT-HA-MQTT).
    If entities you don't recognise share the device (another tracker publishing the same ids), find and
    remove that publisher, then clear its retained discovery topics: an empty retained `mqtt.publish` to
    each `homeassistant/.../config` topic makes Home Assistant drop the entity.
@@ -182,7 +184,31 @@ Confirms B-PT-SCREENSAVER, B-PT-SCREENSAVER-START.
 3. Quit, wait for the screensaver again, wake it with a button, then pick the same game from the list
    after 10+ seconds: that session *is* logged.
 
-## 10. Recording results
+## 10. playtracker cabinet events
+
+Confirms B-PT-LIFECYCLE. Keep `tail -f /tmp/playtracker/playtracker.log` open over SSH, and the device page
+in Home Assistant.
+
+1. Copy the new `playtracker.py` over the old one, as in the README, and reboot. The device gains
+   *Screensaver*, *Activity* and *Cabinet*: *Activity* `menu`, *Screensaver* off, and a *Cabinet* `start`
+   event in the logbook.
+2. Set the screensaver to *dim* with a 1-minute delay, and wait. Expect *Screensaver* on with the attribute
+   `type: dim` (the argument of `screensaver-start`), *Activity* `screensaver`, then `sleep` in the log and a
+   *Cabinet* `sleep` event. The device must stay available. **Record** whether `sleep` arrives, and how long
+   after `screensaver-start`. Press a button: `wake` and `screensaver-stop`, *Activity* back to `menu`.
+3. Set it to *random video*. Expect `type: random video` and no `sleep` in the log (video screensavers
+   don't sleep). With *Screensaver controls* on, press START on a video: *Activity* ends on `playing`, while
+   *Now playing* stays Idle and no `session_start` fires. Quit the game, and **record** whether a `wake` turns
+   up in the log afterwards: EmulationStation forces one after a screensaver launch.
+4. Launch a game from the list: a `session_start` event and *Activity* `playing`; quit: `menu`.
+5. *Quit > Reboot*. Expect `quit reboot` and `reboot` in the log, in either order, and one *Cabinet*
+   `reboot` event; *Activity* `off` and the other entities unavailable until the cabinet is back (a `start`
+   event, `menu`). **Record** both log lines with their arguments.
+6. *Quit > Shutdown*, then power on. **Record** whether the `shutdown` event reached Home Assistant before
+   the network went down. If it didn't, no `shutdown` event may turn up after the next boot either: it's
+   dropped, not queued.
+
+## 11. Recording results
 
 For each assumption a step confirmed, set `status="hardware-verified"` in
 `src/batocera_mcp/assumptions.py` with what you saw in `note`, and update its row in the README's

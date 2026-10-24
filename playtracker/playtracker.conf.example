@@ -8,7 +8,8 @@ MQTT_PORT=1883
 MQTT_USER=batocera
 MQTT_PASSWORD=change-me
 
-# Topics: <TOPIC_PREFIX>/<DEVICE_ID>/now_playing, .../last_session, .../session, .../status
+# Topics: <TOPIC_PREFIX>/<DEVICE_ID>/now_playing, .../last_session, .../session, .../status,
+# .../screensaver, .../activity, .../cabinet
 TOPIC_PREFIX=batocera
 # DEVICE_ID goes in topics and unique IDs; it defaults to the cabinet's hostname
 # (usually "batocera"). DEVICE_NAME is what Home Assistant shows, and builds entity IDs
