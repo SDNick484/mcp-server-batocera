@@ -247,6 +247,20 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "deletes the marker itself on reboot, shutdown and quit, so the tmpfs only matters after a power cut.",
     ),
     Assumption(
+        "B-PT-LIFECYCLE",
+        "A reboot fires quit with the argument reboot and then reboot; a shutdown fires quit shutdown then "
+        "shutdown; a plain quit fires quit with no argument. sleep and wake take no arguments and aren't a "
+        "system suspend: sleep fires once input has been idle for the screensaver delay and the screensaver "
+        "shows no videos or images (dim, black), and wake on the input that cancels the screensaver. "
+        "screensaver-start's argument is the screensaver type (dim, black, random video, slideshow, suspend).",
+        f"{ES} es-core/src/utils/Platform.cpp quitES() and processQuitMode(), es-core/src/Window.cpp "
+        "onSleep()/onWake()/cancelScreenSaver(), es-app/src/SystemScreenSaver.cpp allowSleep() and "
+        "startScreenSaver(), at batocera.linux 43's pinned commit 68f45afb (unchanged on master 37d70f3)",
+        "high",
+        note="Read in source 2026-10-24; not yet seen on the cabinet. B-PT-SCRIPTS saw screensaver-start and "
+        "wake arrive, but not their arguments, and not sleep, quit, reboot or shutdown.",
+    ),
+    Assumption(
         "B-PT-HA-MQTT",
         "Home Assistant's Mosquitto add-on accepts a Home Assistant user's login, and MQTT discovery creates the "
         "sensor, binary_sensor and event entities from the retained config messages.",

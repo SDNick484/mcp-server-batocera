@@ -26,6 +26,15 @@ script recognizes that case (the started game is the one the screensaver was
 showing, and the screensaver was active within the last few seconds) and, with
 IGNORE_SCREENSAVER_LAUNCHES=yes (the default), doesn't log it. Sessions shorter
 than MIN_SESSION_SECONDS (default 60) aren't logged either.
+
+Besides the play log, it publishes what the cabinet is doing, for automations
+(lights when a game starts or the screensaver kicks in): a Screensaver binary
+sensor, an Activity sensor (menu, screensaver, playing, off), session_start
+events, and a Cabinet event entity (start, wake, sleep, quit, reboot, shutdown).
+Those are about what's on screen, so a game launched from the screensaver reads
+"playing" in Activity even when it isn't logged. EmulationStation's sleep and
+wake are its idle sleep during a dim or black screensaver, not a system suspend,
+so the cabinet stays online through them.
 """
 
 from __future__ import annotations
@@ -62,6 +71,11 @@ DEFAULTS = {
 }
 
 Message = tuple[str, str, bool]  # topic, payload, retain
+
+ACTIVITIES = ("menu", "screensaver", "playing", "off")
+# The Cabinet event entity's types. reboot and shutdown come from quit's argument (see handle()).
+CABINET_EVENTS = ("start", "wake", "sleep", "quit", "reboot", "shutdown")
+GOING_DOWN = ("quit", "reboot", "shutdown")
 
 
 # --- Config --------------------------------------------------------------------
@@ -223,13 +237,48 @@ def discovery_messages(conf: dict[str, str]) -> list[Message]:
                 "name": "Game session",
                 "icon": "mdi:timer-outline",
                 "state_topic": f"{base}/session",
-                "event_types": ["session_end"],
+                "event_types": ["session_start", "session_end"],
+            },
+        ),
+        (
+            "binary_sensor",
+            "screensaver",
+            {
+                "name": "Screensaver",
+                "icon": "mdi:monitor-shimmer",
+                "state_topic": f"{base}/screensaver",
+                "value_template": "{{ 'ON' if value_json.active else 'OFF' }}",
+                "json_attributes_topic": f"{base}/screensaver",  # its "type" attribute: dim, black, ...
+            },
+        ),
+        (
+            "sensor",
+            "activity",
+            {
+                "name": "Activity",
+                "icon": "mdi:controller-classic",
+                "device_class": "enum",
+                "options": list(ACTIVITIES),
+                "state_topic": f"{base}/activity",
+            },
+        ),
+        (
+            "event",
+            "cabinet",
+            {
+                "name": "Cabinet",
+                "icon": "mdi:power",
+                "state_topic": f"{base}/cabinet",
+                "event_types": list(CABINET_EVENTS),
             },
         ),
     ]
     out: list[Message] = []
     for component, object_id, cfg in entities:
-        payload = {**cfg, **common, "unique_id": f"batocera_{dev_id}_{object_id}"}
+        # Activity has no availability topic: with one, Home Assistant would show it as "unavailable" once
+        # the cabinet goes offline, and its "off" state would never be seen.
+        extra = {"device": device} if object_id == "activity" else common
+        payload = {**cfg, **extra, "unique_id": f"batocera_{dev_id}_{object_id}"}
         topic = f"{conf['DISCOVERY_PREFIX']}/{component}/{dev_id}/{object_id}/config"
         out.append((topic, json.dumps(payload), True))
     return out
@@ -251,44 +300,91 @@ class Tracker:
     def _online(self, online: bool) -> Message:
         return (f"{self.base}/status", "online" if online else "offline", True)
 
+    def _screensaver(self, active: bool, kind: str = "") -> Message:
+        payload: dict[str, Any] = {"active": active} | ({"type": kind} if kind else {})
+        return (f"{self.base}/screensaver", json.dumps(payload), True)
+
+    def _cabinet_event(self, kind: str, now: float) -> Message:
+        return (f"{self.base}/cabinet", json.dumps({"event_type": kind, "at": now_iso(now)}), False)
+
+    def _activity(self, force: bool = False, value: str = "") -> list[Message]:
+        """Publish Activity if it changed.
+
+        It's derived from the stored state rather than from the event that just arrived. EmulationStation
+        runs these scripts concurrently, so after START on a screensaver video, screensaver-stop and
+        game-start reach us in either order (ASSUMPTION B-PT-SCREENSAVER-START); whichever is handled last
+        sees both changes and publishes "playing". Mapping each event to a value would leave "menu" behind
+        whenever screensaver-stop came second.
+        """
+        if not value:
+            if self.state.read("session"):  # ignored screensaver launches too: someone is at the cabinet
+                value = "playing"
+            elif self.state.read("screensaver").get("active"):
+                value = "screensaver"
+            else:
+                value = "menu"
+        if not force and self.state.read("activity").get("value") == value:
+            return []
+        self.state.write("activity", {"value": value})
+        return [(f"{self.base}/activity", value, True)]
+
     def handle(self, event: str, args: list[str]) -> list[Message]:
         now = self.clock()
         out: list[Message] = []
         # Discovery once per boot: reboot, shutdown and quit delete the marker below, and after a power cut
         # it's gone because /tmp is a tmpfs (ASSUMPTION B-PT-TMP). Retained messages keep the entities anyway.
+        # Not on the way down: a reboot fires quit and then reboot (ASSUMPTION B-PT-LIFECYCLE), and the second
+        # would otherwise find the marker the first deleted and announce the cabinet online again.
         marker = self.state.root / "announced"
         announced = False
-        if not marker.exists() and event not in ("game-selected", "system-selected"):
+        if not marker.exists() and event not in ("game-selected", "system-selected", *GOING_DOWN):
             out += discovery_messages(self.conf)
             out.append(self._online(True))
             self.state.root.mkdir(parents=True, exist_ok=True)
             marker.touch()
             announced = True
 
-        if event in ("start", "wake"):
-            out += ([] if announced else [self._online(True)]) + [self._idle()]
-        elif event in ("quit", "shutdown", "reboot", "sleep"):
+        if event == "start":
+            out += [] if announced else [self._online(True)]
+            out += self._end_session(now)  # EmulationStation restarted mid-game (a crash): close that session
+            self.state.write("screensaver", None)
+            out += [self._idle(), self._screensaver(False), self._cabinet_event("start", now)]
+        elif event in ("wake", "sleep"):
+            # ASSUMPTION B-PT-LIFECYCLE: sleep and wake are EmulationStation's idle sleep during a dim or black
+            # screensaver, not a system suspend, so the cabinet stays online; the screensaver events say
+            # what's on screen. No Idle here either: an MCP launch during a dim screensaver wakes ES just
+            # before game-start, and this script could finish second and overwrite "playing".
+            out += [] if announced or event == "sleep" else [self._online(True)]
+            out.append(self._cabinet_event(event, now))
+        elif event in GOING_DOWN:
             out += self._end_session(now)
+            if event == "quit":  # reboot and shutdown fire quit <reboot|shutdown> too; report each once
+                out.append(self._cabinet_event(args[0] if args and args[0] in ("reboot", "shutdown") else "quit", now))
+            out += self._activity(value="off")
             out.append(self._online(False))
-            if event != "sleep":
-                with contextlib.suppress(FileNotFoundError):
-                    marker.unlink()
+            with contextlib.suppress(FileNotFoundError):
+                marker.unlink()
+            return out
         elif event == "screensaver-start":
             ss = self.state.read("screensaver")
             self.state.write("screensaver", {**ss, "active": True, "since": now})
+            # ASSUMPTION B-PT-LIFECYCLE: its argument is the screensaver type (dim, black, random video, ...).
+            out.append(self._screensaver(True, args[0] if args else ""))
         elif event == "screensaver-stop":
             ss = self.state.read("screensaver")
             self.state.write("screensaver", {**ss, "active": False, "stopped_at": now})
+            out.append(self._screensaver(False))
         elif event == "game-selected":
             # Only interesting while the screensaver shows games: remember which one is on screen.
             ss = self.state.read("screensaver")
             if ss.get("active") and len(args) >= 2:
                 self.state.write("screensaver", {**ss, "game": unescape(args[1]), "game_at": now})
+            return out  # changes nothing Home Assistant sees
         elif event == "game-start":
             out += self._start_session(args, now)
         elif event == "game-end":
             out += self._end_session(now)
-        return out
+        return out + self._activity(force=announced)
 
     # ASSUMPTION B-PT-SCREENSAVER: the screensaver never launches a game itself, only selects games to show.
     # ASSUMPTION B-PT-SCREENSAVER-START: START on its video fires screensaver-stop and game-start, either order.
@@ -318,9 +414,11 @@ class Tracker:
         self.state.write("session", session)
         if ignored:
             return out
-        payload = {k: session[k] for k in ("game", "system", "rom", "source")}
-        payload |= {"state": "playing", "started": now_iso(now)}
-        out.append((f"{self.base}/now_playing", json.dumps(payload), True))
+        info = {k: session[k] for k in ("game", "system", "rom", "source")} | {"started": now_iso(now)}
+        out.append((f"{self.base}/now_playing", json.dumps({"state": "playing", **info}), True))
+        # Playing already turns on, but an event also fires when the same game is relaunched, and hands
+        # the game to the automation. Ignored launches get none: this entity is the session log's.
+        out.append((f"{self.base}/session", json.dumps({"event_type": "session_start", **info}), False))
         return out
 
     def _end_session(self, now: float) -> list[Message]:
@@ -442,6 +540,18 @@ def publish(conf: dict[str, str], messages: list[Message], timeout: float = 5.0)
 
 
 # --- Outbox: messages that couldn't be sent wait for the next event ----------------------------
+def _is_log_entry(message: Message) -> bool:
+    """A session_end event is a log entry and worth delivering late; other events are for automations.
+
+    A late automation event does harm: a shutdown event that didn't get out before the network went down
+    would be delivered at the next boot, and run the shutdown automation then.
+    """
+    try:
+        return bool(json.loads(message[1]).get("event_type") == "session_end")
+    except (ValueError, AttributeError):  # not JSON, or not an object
+        return False
+
+
 def deliver(conf: dict[str, str], state: State, messages: list[Message], log: Callable[[str], None]) -> None:
     pending = [tuple(m) for m in state.read("outbox").get("messages", [])]
     batch = [(str(t), str(p), bool(r)) for t, p, r in pending] + messages
@@ -453,17 +563,21 @@ def deliver(conf: dict[str, str], state: State, messages: list[Message], log: Ca
             state.write("outbox", None)
             log(f"flushed {len(pending)} queued message(s)")
     except (OSError, MQTTError) as exc:
-        # Keep the newest retained message per topic, plus every session event.
+        # Keep the newest retained message per topic (it's the current state), plus every logged session.
         keep: dict[str, Message] = {}
         events: list[Message] = []
+        dropped = 0
         for m in batch:
             if m[2]:
                 keep[m[0]] = m
-            else:
+            elif _is_log_entry(m):
                 events.append(m)
+            else:
+                dropped += 1
         queued = (list(keep.values()) + events)[-OUTBOX_MAX:]
         state.write("outbox", {"messages": queued})
-        log(f"MQTT publish failed ({exc}); {len(queued)} message(s) queued for the next event")
+        note = f", {dropped} event(s) dropped" if dropped else ""
+        log(f"MQTT publish failed ({exc}); {len(queued)} message(s) queued for the next event{note}")
 
 
 def _logger(state: State) -> Callable[[str], None]:
