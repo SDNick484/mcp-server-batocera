@@ -513,3 +513,41 @@ async def take_screenshot() -> ActionResult:
 async def reset_game() -> ActionResult:
     """Reset the running RetroArch game, like pressing the console's reset button. Unsaved progress is lost."""
     return await _retroarch("RESET", "reset", "Reset {game}.")
+
+
+# ASSUMPTION B-RA-AUDIO-SLOT: VOLUME_UP/VOLUME_DOWN step 0.5 dB, MUTE toggles, slots move by one.
+_VOLUME: dict[str, tuple[str, str, str]] = {
+    "up": ("VOLUME_UP", "turn up the volume of", "Turned up the volume of {game} one step (0.5 dB)."),
+    "down": ("VOLUME_DOWN", "turn down the volume of", "Turned down the volume of {game} one step (0.5 dB)."),
+    "mute": ("MUTE", "toggle mute for", "Toggled mute for {game} (RetroArch doesn't report which way)."),
+}
+_SLOT: dict[str, tuple[str, str, str]] = {
+    "next": ("STATE_SLOT_PLUS", "select the next save slot for", "Selected the next save slot for {game}."),
+    "previous": (
+        "STATE_SLOT_MINUS",
+        "select the previous save slot for",
+        "Selected the previous save slot for {game}.",
+    ),
+}
+
+
+@mcp.tool(title="Adjust game volume", annotations=_ACT)
+async def adjust_volume(action: Literal["up", "down", "mute"]) -> ActionResult:
+    """Change the running RetroArch game's volume by one step (0.5 dB), or toggle mute.
+
+    "mute" is a toggle: sending it while muted unmutes, and RetroArch can't be asked whether it's muted.
+    This is RetroArch's own volume, not the TV's or the cabinet's speakers.
+    """
+    command, verb, done = _VOLUME[action]
+    return await _retroarch(command, verb, done)
+
+
+@mcp.tool(title="Change save state slot", annotations=_ACT)
+async def change_save_slot(direction: Literal["next", "previous"]) -> ActionResult:
+    """Move the running RetroArch game's save-state slot by one; save_state and load_state then use it.
+
+    RetroArch shows the new slot number on screen. Going up wraps from 999 to 0; going down stops at
+    Auto (-1). Nothing is saved or loaded by this.
+    """
+    command, verb, done = _SLOT[direction]
+    return await _retroarch(command, verb, done)
