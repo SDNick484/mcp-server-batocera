@@ -39,6 +39,7 @@ from typing_extensions import TypedDict
 from . import config as cfg
 from .client import BatoceraError, EmulationStationClient, Game, GameDetails, System, to_details, to_game, to_system
 from .config import load_settings
+from .ratelimit import TokenBucket, refusal
 from .retroarch import RetroArchClient, RetroArchStatus
 
 log = logging.getLogger(__name__)
@@ -49,6 +50,20 @@ POLL_INTERVAL_S = 0.5
 
 _es: EmulationStationClient | None = None
 _ra: RetroArchClient | None = None
+
+
+# Rate limits. The mechanism is ratelimit.py (shared with the sibling servers); the numbers are this cabinet's.
+# A model stuck in a loop could start and stop emulators every second, or keep EmulationStation re-reading every
+# gamelist. launch_game and quit_game share one bucket because a launch/quit loop is the runaway in question:
+# separate buckets would let it run at twice the rate. Only calls that are about to reach the cabinet take a
+# token; dry runs, no-ops and argument errors are free.
+def _fresh_buckets() -> tuple[TokenBucket, TokenBucket]:
+    launch = TokenBucket(3, 0.2)  # 3 at once, then one every 5 s
+    reload = TokenBucket(2, 0.05)  # 2 at once, then one every 20 s
+    return launch, reload
+
+
+_launch_bucket, _reload_bucket = _fresh_buckets()
 
 
 def es() -> EmulationStationClient:
@@ -63,10 +78,13 @@ def ra() -> RetroArchClient:
 
 @asynccontextmanager
 async def lifespan(_server: MCPServer) -> AsyncIterator[None]:
-    global _es, _ra
+    global _es, _ra, _launch_bucket, _reload_bucket
     settings = load_settings()
     _es = EmulationStationClient(settings)
     _ra = RetroArchClient(settings.host, settings.retroarch_port)
+    # Full buckets for each lifespan: over HTTP that's once per process (every session shares them, as they share
+    # the one cabinet); in tests, once per in-process Client, so spent tokens never leak from one test to the next.
+    _launch_bucket, _reload_bucket = _fresh_buckets()
     try:
         yield
     finally:
@@ -328,6 +346,17 @@ def _dry() -> bool:
     return es().settings.dry_run
 
 
+def _spend(bucket: TokenBucket, what: str) -> None:
+    """Take a token for an action about to reach the cabinet, or refuse it (taking nothing) with how long to wait.
+
+    Call it last, after validation, no-op returns and the dry-run check, so only real sends are counted.
+    """
+    wait = bucket.take()
+    if wait > 0:
+        settings = es().settings
+        raise BatoceraError(refusal(what, wait, settings.name or settings.host))
+
+
 async def _wait_for(check: Callable[[], Any], timeout: float) -> Any:
     deadline = asyncio.get_running_loop().time() + timeout
     while True:
@@ -365,6 +394,7 @@ async def launch_game(system: SystemArg, game_id: GameIdArg) -> ActionResult:
     sent = [f"POST /launch {path}"]
     if _dry():
         return _result(f"launch {name} ({s})", sent, "dry_run")
+    _spend(_launch_bucket, f"launch {name}")
     await c.launch(path)
 
     # ASSUMPTION B-ES-LAUNCH: /launch answers 200 even for a path it doesn't know, and the game starts a
@@ -398,6 +428,7 @@ async def quit_game() -> ActionResult:
     sent = ["GET /emukill"]
     if _dry():
         return _result(f"quit {name}", sent, "dry_run")
+    _spend(_launch_bucket, f"quit {name}")
     await c.emukill()
 
     async def stopped() -> bool:  # ASSUMPTION B-ES-EMUKILL
@@ -455,6 +486,7 @@ async def reload_games() -> ActionResult:
     sent = ["GET /reloadgames"]
     if _dry():
         return _result("rescan the game lists", sent, "dry_run")
+    _spend(_reload_bucket, "rescan the game lists")
     await es().reload_games()
     return _result("EmulationStation is reloading its game lists.", sent)
 
