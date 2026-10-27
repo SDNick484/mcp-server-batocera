@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import re
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -210,20 +211,36 @@ async def find_games(
     ] = None,
     system: Annotated[str | None, Field(default=None, max_length=40, description="Only this system.")] = None,
     sort: Annotated[
-        Literal["relevance", "name", "most_played", "most_time", "recently_played"],
-        Field(description="relevance (best name match first), or by play count, play time or last played."),
+        Literal["relevance", "name", "most_played", "most_time", "recently_played", "random"],
+        Field(
+            description="relevance (best name match first), by name, play count, play time or last played, "
+            "or random (a shuffled pick of the matches)."
+        ),
     ] = "relevance",
     favorites_only: bool = False,
+    genre: Annotated[
+        str | None,
+        Field(default=None, max_length=50, description="Filter by genre substring, e.g. 'Fighting', 'Platform'."),
+    ] = None,
+    players: Annotated[
+        str | None,
+        Field(default=None, max_length=10, description="Filter by player string or count, e.g. '2', '1-2'."),
+    ] = None,
     limit: Annotated[int, Field(ge=1, le=100)] = 20,
+    offset: Annotated[int, Field(ge=0, description="Skip the first N matching games for pagination.")] = 0,
 ) -> GameList:
     """Search the cabinet's games by name, optionally within one system, or list favorites, most played or
-    recently played games. Each result's id and system are what launch_game and get_game take.
+    recently played games. genre and players filter by case-insensitive substring; games without that
+    metadata never match a filter. matches counts every match; use offset to page past the first limit.
+    Each result's id and system are what launch_game and get_game take.
     """
     c = es()
     names = [_check(cfg.system_name, system)] if system else [str(s.get("name")) for s in await c.game_systems()]
     query_words = _words(query) if query else []
     if query and not query_words:
         raise BatoceraError("The query has no letters or digits to match.")
+    genre_q = genre.strip().lower() if genre else None
+    players_q = players.strip().lower() if players else None
 
     # ASSUMPTION B-ES-THREADS: EmulationStation's pool has 8+ threads, so 2 at a time leaves it room for other
     # clients (its web UI, Pixelcade); hardware showed 32 systems load in about 1 s at this rate.
@@ -238,6 +255,10 @@ async def find_games(
         for raw in games.values():
             game = to_game(raw)
             if favorites_only and not game["favorite"]:
+                continue
+            if genre_q and (game["genre"] is None or genre_q not in game["genre"].lower()):
+                continue
+            if players_q and (game["players"] is None or players_q not in game["players"].lower()):
                 continue
             score = _match_score(game["name"], query_words) if query_words else 0
             if score is not None:
@@ -254,10 +275,16 @@ async def find_games(
         scored.sort(key=lambda x: x[1]["last_played"] or "", reverse=True)
     elif sort == "name":
         scored.sort(key=lambda x: x[1]["name"].lower())
+    elif sort == "random":
+        random.shuffle(scored)
     else:
         scored.sort(key=lambda x: (x[0], x[1]["name"].lower()))
     games_out = [g for _, g in scored]
-    return GameList(matches=len(games_out), games=games_out[:limit], truncated=len(games_out) > limit)
+    return GameList(
+        matches=len(games_out),
+        games=games_out[offset : offset + limit],
+        truncated=len(games_out) > (offset + limit),
+    )
 
 
 @mcp.tool(title="Get game details", annotations=_READ)
