@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
+import anyio
 import httpx
 import pytest
 
 from batocera_mcp import config as cfg
+from batocera_mcp import server
 from batocera_mcp.client import BatoceraError, EmulationStationClient, es_time, to_game
 from batocera_mcp.retroarch import parse_status
 
@@ -104,6 +107,92 @@ async def test_connection_refused_mentions_public_access():
             await c.version()
     finally:
         await c.aclose()
+
+
+class SlowES:
+    """A MockTransport handler that holds each request open briefly and records how many overlapped."""
+
+    def __init__(self, systems: list[str], delay_s: float = 0.05) -> None:
+        self.systems = systems
+        self.delay_s = delay_s
+        self.in_flight = 0
+        self.peak = 0
+        self.game_fetches: list[str] = []
+
+    async def __call__(self, request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/systems":
+            body = [{"name": s, "fullname": s, "gamesystem": "true", "totalGames": "1"} for s in self.systems]
+            return httpx.Response(200, text=json.dumps(body))
+        system = path.split("/")[2]
+        self.game_fetches.append(system)
+        self.in_flight += 1
+        self.peak = max(self.peak, self.in_flight)
+        try:
+            await anyio.sleep(self.delay_s)
+        finally:
+            self.in_flight -= 1
+        game = {"id": f"{system}-1", "name": f"{system} game", "systemName": system}
+        return httpx.Response(200, text=json.dumps([game]))
+
+
+def slow_client(handler: SlowES) -> EmulationStationClient:
+    return EmulationStationClient(cfg.Settings(url="http://10.0.0.9:1234"), httpx.MockTransport(handler))
+
+
+@pytest.mark.anyio
+async def test_games_fetches_different_systems_concurrently():
+    es = SlowES(["snes", "nes", "mame"])
+    c = slow_client(es)
+    try:
+        results = await asyncio.gather(*(c.games(s) for s in es.systems))
+    finally:
+        await c.aclose()
+    assert [list(r) for r in results] == [["snes-1"], ["nes-1"], ["mame-1"]]
+    # The cache lock isn't held across the request, so all three were on the wire at once.
+    assert es.peak == 3
+
+
+@pytest.mark.anyio
+async def test_games_shares_one_fetch_per_system():
+    es = SlowES(["snes"])
+    c = slow_client(es)
+    try:
+        results = await asyncio.gather(*(c.games("snes") for _ in range(5)))
+    finally:
+        await c.aclose()
+    assert es.game_fetches == ["snes"]
+    assert all(r is results[0] for r in results)
+
+
+@pytest.mark.anyio
+async def test_invalidate_mid_fetch_drops_the_stale_list():
+    es = SlowES(["snes"])
+    c = slow_client(es)
+    try:
+        fetch = asyncio.create_task(c.games("snes"))
+        await anyio.sleep(es.delay_s / 2)  # the request is in flight
+        c.invalidate()
+        await fetch
+        assert c._games == {}
+        await c.games("snes")
+        assert es.game_fetches == ["snes", "snes"]
+    finally:
+        await c.aclose()
+
+
+@pytest.mark.anyio
+async def test_find_games_loads_two_systems_at_a_time(monkeypatch):
+    es = SlowES(["snes", "nes", "mame", "megadrive", "n64"])
+    c = slow_client(es)
+    monkeypatch.setattr(server, "_es", c)
+    try:
+        r = await server.find_games(query="game", sort="name")
+    finally:
+        await c.aclose()
+    assert r["matches"] == 5
+    assert sorted(es.game_fetches) == sorted(es.systems)
+    assert es.peak == 2
 
 
 @pytest.fixture
