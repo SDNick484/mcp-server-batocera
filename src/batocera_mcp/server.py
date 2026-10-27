@@ -24,14 +24,16 @@ Safety shape (the same idea as the Shield's key and app allow-lists):
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import random
 import re
-from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from typing import Annotated, Any, Literal, TypeVar
 
 from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ResourceError
 from mcp.types import ToolAnnotations
 from pydantic import Field
 from typing_extensions import TypedDict
@@ -583,3 +585,76 @@ async def change_save_slot(direction: Literal["next", "previous"]) -> ActionResu
     """
     command, verb, done = _SLOT[direction]
     return await _retroarch(command, verb, done)
+
+
+# --- Resources and prompts ---------------------------------------------------------
+# Resources are read-only data a client can attach as context, without a tool call. Each returns JSON text.
+# They call the same functions the tools use, so validation happens in one place. A game record only leaves
+# through to_game(), which drops the internal ROM path: the model never sees where a file lives on disk.
+@contextmanager
+def _resource_errors() -> Iterator[None]:
+    # The SDK hides any exception that isn't a ResourceError (the client gets only the URI). BatoceraError is
+    # ours and actionable, e.g. "isn't a system name" or the cabinet being unreachable, so pass its text on.
+    try:
+        yield
+    except BatoceraError as exc:
+        raise ResourceError(str(exc)) from exc
+
+
+@mcp.resource("batocera://systems", mime_type="application/json")
+async def systems_resource() -> str:
+    """Game systems with game counts, as list_systems returns them."""
+    with _resource_errors():
+        return json.dumps(await list_systems())
+
+
+@mcp.resource("batocera://status", mime_type="application/json")
+async def status_resource() -> str:
+    """Whether the cabinet is reachable and what is running, as get_status returns it."""
+    with _resource_errors():
+        return json.dumps(await get_status())
+
+
+@mcp.resource("batocera://games/{system}", mime_type="application/json")
+async def games_resource(system: str) -> str:
+    """Every game in one system, sorted by name. The system is checked the same way the tools check it."""
+    with _resource_errors():
+        s = _check(cfg.system_name, system)
+        games = [to_game(raw) for raw in (await es().games(s)).values()]
+        games.sort(key=lambda g: g["name"].lower())
+        return json.dumps(games)
+
+
+@mcp.prompt()
+async def recommend_game(genre: str, players: str = "1") -> str:
+    """Suggest three retro games on the cabinet for a genre and player count."""
+    return (
+        f"Use the batocera tools to suggest 3 retro games for the genre '{genre}' and {players} player(s).\n"
+        f"Call find_games with genre='{genre}' and players='{players}', then pick three titles from its matches.\n"
+        "For each title, give its name, its system, and its play statistics from the results: play count, play "
+        "time, and when it was last played. Say so when a game has never been played. If there are no matches, "
+        "say so and suggest a different genre.\n"
+        "Don't launch anything. Wait for the user to pick a game, then use its id with launch_game."
+    )
+
+
+@mcp.prompt()
+async def diagnose_cabinet() -> str:
+    """Work out why the cabinet can't be reached, then walk the user through its LAN and Developer settings."""
+    return (
+        "The Batocera cabinet isn't answering. Work through these steps in order and stop at the first fix "
+        "that works.\n"
+        "1. Call get_status. If reachable is true, say the cabinet is fine and stop. If it is false, read its error.\n"
+        "2. If you can run a shell, run `mcp-server-batocera doctor` (add --verbose for every check). It checks "
+        "each layer in order and names the HARDWARE_VALIDATION.md step for the first failure. `doctor` is a "
+        "command-line tool, not an MCP tool. If you can't run a shell, ask the user to run it and paste the output.\n"
+        "3. If the connection is refused or the API answers 403, public web access is off. Ask the user to open "
+        "Main Menu > System Settings > Developer on the cabinet, turn on 'Enable public web access', and reboot. "
+        "Then call get_status again.\n"
+        "4. If the cabinet's address has changed, ask the user to check BATOCERA_URL. Suggest a DHCP reservation "
+        "so the address stays fixed.\n"
+        "5. For the RetroArch tools only: if RetroArch doesn't answer while a game runs, its network commands are "
+        "off. Ask the user to add global.retroarch.network_cmd_enable=true to /userdata/system/batocera.conf over "
+        "SSH, then relaunch the game. Don't log in to the cabinet yourself.\n"
+        "Tell the user what you found at each step, and ask before changing anything on the cabinet."
+    )
