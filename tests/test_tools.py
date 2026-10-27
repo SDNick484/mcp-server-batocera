@@ -190,6 +190,133 @@ async def test_recently_played_and_favorites(mcp_client):
     assert [g["name"] for g in r["games"]] == ["Super Mario World"]
 
 
+ALL_NAMES = [
+    "Galaga",
+    "Pac-Man (Midway)",
+    "Street Fighter II Turbo",
+    "Super Mario World",
+    "Super Metroid",
+    "Super Smash Bros. Melee",
+]
+
+
+async def test_find_games_schema_has_paging_and_filters(mcp_client):
+    props = (await tools(mcp_client))["find_games"].input_schema["properties"]
+    assert props["offset"]["minimum"] == 0 and props["offset"]["default"] == 0
+    assert props["genre"]["anyOf"][0]["maxLength"] == 50
+    assert props["players"]["anyOf"][0]["maxLength"] == 10
+    assert "random" in props["sort"]["enum"]
+
+
+@pytest.mark.parametrize(
+    ("offset", "limit", "names", "truncated"),
+    [
+        (0, 2, ALL_NAMES[0:2], True),
+        (2, 2, ALL_NAMES[2:4], True),
+        (4, 2, ALL_NAMES[4:6], False),  # exactly reaches the end
+        (5, 10, ALL_NAMES[5:], False),
+        (6, 2, [], False),  # past the end: empty page, matches still counted
+        (50, 5, [], False),
+    ],
+)
+async def test_find_games_offset_pages(mcp_client, offset, limit, names, truncated):
+    r = (await call(mcp_client, "find_games", sort="name", offset=offset, limit=limit)).structured_content
+    assert [g["name"] for g in r["games"]] == names
+    assert r["matches"] == 6
+    assert r["truncated"] is truncated
+
+
+async def test_find_games_pages_cover_every_match_once(mcp_client):
+    seen = []
+    for offset in range(0, 6, 4):
+        r = (await call(mcp_client, "find_games", sort="name", offset=offset, limit=4)).structured_content
+        seen += [g["name"] for g in r["games"]]
+    assert seen == ALL_NAMES
+
+
+async def test_find_games_negative_offset_is_rejected(mcp_client):
+    r = await call(mcp_client, "find_games", offset=-1)
+    assert r.is_error
+
+
+@pytest.mark.parametrize(
+    ("genre", "names"),
+    [
+        ("Fighting", ["Street Fighter II Turbo"]),
+        ("fight", ["Street Fighter II Turbo"]),  # substring, case-insensitive
+        ("PLATFORM", ["Super Mario World"]),
+        ("a", ["Super Metroid", "Super Mario World"]),  # Action, Platform; games with no genre skipped
+        ("Puzzle", []),
+    ],
+)
+async def test_find_games_by_genre(mcp_client, genre, names):
+    r = (await call(mcp_client, "find_games", genre=genre, sort="name")).structured_content
+    assert sorted(g["name"] for g in r["games"]) == sorted(names)
+    assert all(g["genre"] is not None for g in r["games"])
+    assert r["matches"] == len(names)
+
+
+@pytest.mark.parametrize(
+    ("players", "names"),
+    [
+        ("1-2", ["Galaga", "Pac-Man (Midway)", "Street Fighter II Turbo", "Super Mario World"]),
+        ("2", ["Galaga", "Pac-Man (Midway)", "Street Fighter II Turbo", "Super Mario World"]),
+        ("4", ["Super Smash Bros. Melee"]),
+        ("1", ["Galaga", "Pac-Man (Midway)", "Street Fighter II Turbo", "Super Mario World",
+               "Super Smash Bros. Melee"]),  # Super Metroid has no players field, so never matches
+        ("8", []),
+    ],
+)  # fmt: skip
+async def test_find_games_by_players(mcp_client, players, names):
+    r = (await call(mcp_client, "find_games", players=players, sort="name")).structured_content
+    assert [g["name"] for g in r["games"]] == names
+    assert r["matches"] == len(names)
+
+
+async def test_find_games_filters_combine(mcp_client):
+    r = (await call(mcp_client, "find_games", genre="fighting", players="2", system="snes")).structured_content
+    assert [g["name"] for g in r["games"]] == ["Street Fighter II Turbo"]
+    r = (await call(mcp_client, "find_games", query="super", players="1-2")).structured_content
+    assert [g["name"] for g in r["games"]] == ["Super Mario World"]
+    r = (await call(mcp_client, "find_games", genre="platform", system="mame")).structured_content
+    assert r["games"] == [] and r["matches"] == 0
+
+
+@pytest.mark.parametrize(("arg", "value"), [("genre", "x" * 51), ("players", "1" * 11)])
+async def test_find_games_filter_length_limits(mcp_client, arg, value):
+    r = await call(mcp_client, "find_games", **{arg: value})
+    assert r.is_error
+
+
+async def test_find_games_random_returns_every_match(mcp_client):
+    r = (await call(mcp_client, "find_games", sort="random")).structured_content
+    assert sorted(g["name"] for g in r["games"]) == ALL_NAMES
+    assert (r["matches"], r["truncated"]) == (6, False)
+
+
+async def test_find_games_random_shuffles_before_slicing(mcp_client, monkeypatch):
+    calls = []
+
+    def fake_shuffle(seq):
+        calls.append(len(seq))
+        seq.reverse()
+
+    monkeypatch.setattr(server.random, "shuffle", fake_shuffle)
+    r = (await call(mcp_client, "find_games", sort="random", limit=2, offset=1)).structured_content
+    # The whole match list is shuffled (here: reversed) and only then paged.
+    assert calls == [6]
+    assert len(r["games"]) == 2
+    assert (r["matches"], r["truncated"]) == (6, True)
+
+
+async def test_find_games_random_varies(mcp_client):
+    orders = set()
+    for _ in range(20):
+        r = (await call(mcp_client, "find_games", sort="random")).structured_content
+        orders.add(tuple(g["name"] for g in r["games"]))
+    assert len(orders) > 1  # 6! orders; 20 identical draws has odds of about 1e-54
+
+
 async def test_game_list_is_cached(mcp_client, cabinet):
     await call(mcp_client, "find_games", query="mario", system="snes")
     await call(mcp_client, "find_games", query="metroid", system="snes")

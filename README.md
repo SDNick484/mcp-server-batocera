@@ -192,7 +192,7 @@ To use it as a connector, with cloudflared running on the same machine (keep the
 | ----------------- | --------------------------------------------------------------------------------------------- |
 | `get_status`      | Reachable, EmulationStation version, the running game, busy (scraping/updating), RetroArch state |
 | `list_systems`    | Systems with games (not collections or the picture viewer): counts, played, favorites, most played |
-| `find_games`      | Search by name (punctuation-insensitive), or list favorites / most played / most time / recent |
+| `find_games`      | Search by name (punctuation-insensitive), filter by genre / players, list favorites / most played / most time / recent / random; pages with `offset` |
 | `get_game`        | Description, developer, publisher, rating, players, play count and time                        |
 | `launch_game`     | Start a game by system + id; refuses while another game runs; confirms it started             |
 | `quit_game`       | Quit the running game (**destructive**: unsaved progress is lost)                             |
