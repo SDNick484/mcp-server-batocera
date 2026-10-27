@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import re
 
 import pytest
 from mcp import Client
@@ -592,6 +593,101 @@ async def test_dry_run_audio_and_slot_still_need_a_game(dry_client, cabinet):
     r = await call(dry_client, "change_save_slot", direction="next")
     assert r.is_error and "isn't answering" in text(r)
     assert cabinet.ra_commands == []
+
+
+# --- Rate limits --------------------------------------------------------------------------
+# launch_game and quit_game share a bucket of 3 (one back every 5 s); reload_games has its own of 2 (one back every
+# 20 s). Each test runs in well under 5 s, so no token comes back mid-test.
+def rate_limited(r, what: str) -> bool:
+    """Whether r is ratelimit.refusal()'s message for `what` (the SDK puts "Error executing tool ...: " before it)."""
+    return r.is_error and bool(
+        re.search(
+            rf"Rate limit on Test cabinet: refusing to {re.escape(what)} \(try again in \d+s\)\. "
+            r"This guards against runaway loops; if this is deliberate, wait and retry\.$",
+            text(r),
+        )
+    )
+
+
+async def test_launch_burst_is_refused(mcp_client, cabinet):
+    smw = cabinet.game("snes")
+    for _ in range(3):
+        cabinet.running = None  # the game ends on its own, so each launch is a real one
+        assert (await act(mcp_client, "launch_game", system="snes", game_id=smw["id"]))["outcome"] == "done"
+    cabinet.running = None
+    r = await call(mcp_client, "launch_game", system="snes", game_id=smw["id"])
+    assert rate_limited(r, "launch Super Mario World"), text(r)
+    assert len(cabinet.calls("/launch")) == 3 and cabinet.running is None
+
+
+async def test_quit_burst_is_refused(mcp_client, cabinet):
+    for _ in range(3):
+        cabinet.play("mame")
+        assert (await act(mcp_client, "quit_game"))["outcome"] == "done"
+    cabinet.play("mame")
+    r = await call(mcp_client, "quit_game")
+    assert rate_limited(r, "quit Pac-Man (Midway)"), text(r)
+    assert len(cabinet.calls("/emukill")) == 3 and cabinet.running is not None  # still playing
+
+
+async def test_launch_and_quit_share_a_bucket(mcp_client, cabinet):
+    # A launch/quit loop is the runaway this guards against; separate buckets would let it run twice as fast.
+    smw = cabinet.game("snes")
+    await act(mcp_client, "launch_game", system="snes", game_id=smw["id"])
+    await act(mcp_client, "quit_game")
+    await act(mcp_client, "launch_game", system="snes", game_id=smw["id"])
+    r = await call(mcp_client, "quit_game")
+    assert rate_limited(r, "quit Super Mario World"), text(r)
+    assert cabinet.running["id"] == smw["id"]
+
+
+async def test_reload_burst_is_refused(mcp_client, cabinet):
+    for _ in range(2):
+        assert (await act(mcp_client, "reload_games"))["outcome"] == "done"
+    r = await call(mcp_client, "reload_games")
+    assert rate_limited(r, "rescan the game lists"), text(r)
+    assert cabinet.reloads == 2
+    # Its own bucket: the launch/quit budget is untouched.
+    assert server._launch_bucket.tokens == 3
+
+
+async def test_dry_runs_spend_no_tokens(dry_client, cabinet):
+    smw = cabinet.game("snes")
+    for _ in range(5):
+        assert (await act(dry_client, "launch_game", system="snes", game_id=smw["id"]))["outcome"] == "dry_run"
+        assert (await act(dry_client, "reload_games"))["outcome"] == "dry_run"
+    cabinet.play("snes")
+    for _ in range(5):
+        assert (await act(dry_client, "quit_game"))["outcome"] == "dry_run"
+    assert (server._launch_bucket.tokens, server._reload_bucket.tokens) == (3, 2)
+
+
+async def test_no_ops_and_refusals_spend_no_tokens(mcp_client, cabinet):
+    smw = cabinet.game("snes")
+    for _ in range(5):
+        assert (await act(mcp_client, "quit_game"))["outcome"] == "unchanged"  # nothing running
+        assert (await call(mcp_client, "launch_game", system="snes", game_id="0" * 32)).is_error  # unknown id
+    cabinet.play("snes")
+    for _ in range(5):
+        r = await act(mcp_client, "launch_game", system="snes", game_id=smw["id"])
+        assert r["outcome"] == "unchanged"  # already running
+    cabinet.play("mame")
+    for _ in range(5):
+        r = await call(mcp_client, "launch_game", system="snes", game_id=smw["id"])
+        assert r.is_error and "is running" in text(r)  # refused before the bucket
+    assert server._launch_bucket.tokens == 3
+    assert (await act(mcp_client, "quit_game"))["outcome"] == "done"  # the full budget is still there
+
+
+async def test_each_session_starts_with_full_buckets(settings, monkeypatch, cabinet):
+    # lifespan() rebuilds the buckets, so one session's spent tokens never carry into the next.
+    monkeypatch.setattr(server, "load_settings", lambda: settings)
+    for _ in range(2):
+        async with Client(server.mcp) as c:
+            for _ in range(2):
+                assert (await act(c, "reload_games"))["outcome"] == "done"
+            assert rate_limited(await call(c, "reload_games"), "rescan the game lists")
+    assert cabinet.reloads == 4
 
 
 # --- Faults -------------------------------------------------------------------------------

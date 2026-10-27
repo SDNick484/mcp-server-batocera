@@ -229,6 +229,9 @@ saying what to fix.
   `/removegames`, metadata and media uploads, `/input` (simulated key presses) and `/storage/event`.
 - **One game at a time, on purpose.** `launch_game` won't replace a running game; quitting is a separate
   tool marked destructive, so MCP clients ask before ending someone's game.
+- **Rate limits against runaway loops.** `launch_game` and `quit_game` share a budget of 3 (one more every
+  5 s), and `reload_games` has its own of 2 (one more every 20 s). Past that, a call is refused with how long
+  to wait. Dry runs and calls that change nothing (already running, nothing to quit) don't count.
 - **RetroArch gets constants only** (`PAUSE_TOGGLE`, `SAVE_STATE`, `LOAD_STATE`, `SCREENSHOT`, `RESET`),
   plus `SHOW_MSG` with validated single-line text.
 - Every tool has a title and MCP annotations. Errors say what to do ("turn on public web access",

@@ -23,7 +23,8 @@ reasoning behind non-obvious changes instead of only making them.
   fault switches; used by the tests and `simulate`
 - `src/batocera_mcp/logsafe.py`, `tasks.py`, `ratelimit.py` (and their tests): shared with the sibling
   servers, synced from `mcp-server-shared` by `scripts/sync_shared.py` at the commit in `shared.lock`.
-  `tasks.py` and `ratelimit.py` aren't used here yet. `remote.py` (and `test_remote.py`): the Streamable
+  `tasks.py` isn't used here yet; `server.py` uses `ratelimit.py`'s `TokenBucket` and `refusal` (buckets are
+  rebuilt in `lifespan()`). `remote.py` (and `test_remote.py`): the Streamable
   HTTP transport behind Cloudflare Access, for `serve --http`.
 - `src/batocera_mcp/probe.py`: stdlib-only probe for EmulationStation's HTTP pool size (B-ES-THREADS)
 - `src/batocera_mcp/cli.py`: `serve` (default; stdio, or `--http` on 127.0.0.1:8717/batocera/mcp through
