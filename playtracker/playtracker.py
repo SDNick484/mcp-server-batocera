@@ -44,6 +44,7 @@ import json
 import os
 import re
 import socket
+import ssl
 import struct
 import sys
 import time
@@ -62,6 +63,7 @@ DEFAULTS = {
     "MQTT_PORT": "1883",
     "MQTT_USER": "",
     "MQTT_PASSWORD": "",
+    "MQTT_TLS": "no",  # yes: TLS, checking the broker's certificate against the system CAs. Port 8883 implies it
     "TOPIC_PREFIX": "batocera",
     "DISCOVERY_PREFIX": "homeassistant",
     "DEVICE_ID": "",  # default: the hostname
@@ -141,7 +143,9 @@ class State:
             with contextlib.suppress(FileNotFoundError):
                 path.unlink()
             return
-        tmp = path.with_suffix(".tmp")
+        # One temp file per process: these scripts run concurrently, and with a shared name one run could rename
+        # another's half-written file into place.
+        tmp = path.with_suffix(f".{os.getpid()}.tmp")
         tmp.write_text(json.dumps(data))
         tmp.replace(path)  # atomic: a concurrent reader sees the old or the new file, never half
 
@@ -150,7 +154,8 @@ class State:
         self.root.mkdir(parents=True, exist_ok=True)
         import fcntl  # Linux only; imported here so the module also imports on other systems for tests
 
-        with open(self.root / "lock", "w") as fh:
+        # "a", not "w": "w" truncates the file on every event, a needless write to the cabinet's storage.
+        with open(self.root / "lock", "a") as fh:
             fcntl.flock(fh, fcntl.LOCK_EX)
             try:
                 yield
@@ -522,7 +527,17 @@ def publish(conf: dict[str, str], messages: list[Message], timeout: float = 5.0)
         return
     if not conf["MQTT_HOST"]:
         raise MQTTError(f"MQTT_HOST is not set in {CONF_PATH}")
-    with socket.create_connection((conf["MQTT_HOST"], int(conf["MQTT_PORT"])), timeout=timeout) as sock:
+    tls = conf.get("MQTT_PORT") == "8883" or yes(conf.get("MQTT_TLS", "no"))
+    with contextlib.ExitStack() as stack:
+        raw_sock = stack.enter_context(
+            socket.create_connection((conf["MQTT_HOST"], int(conf["MQTT_PORT"])), timeout=timeout)
+        )
+        sock: socket.socket = raw_sock
+        if tls:
+            # The handshake runs here, under the connect timeout. Its failures (ssl.SSLError) are OSErrors, so
+            # deliver() queues the messages as for any outage. The stack closes the TLS socket, then the plain one.
+            ctx = ssl.create_default_context()
+            sock = stack.enter_context(ctx.wrap_socket(raw_sock, server_hostname=conf["MQTT_HOST"]))
         sock.settimeout(timeout)
         client_id = f"playtracker-{conf['DEVICE_ID']}-{os.getpid()}"[:23]
         sock.sendall(connect_packet(client_id, conf["MQTT_USER"], conf["MQTT_PASSWORD"]))

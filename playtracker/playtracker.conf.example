@@ -7,6 +7,9 @@ MQTT_HOST=homeassistant.local
 MQTT_PORT=1883
 MQTT_USER=batocera
 MQTT_PASSWORD=change-me
+# TLS: yes to encrypt (port 8883 turns it on by itself). The broker's certificate is checked
+# against the system CAs and must match MQTT_HOST, so a self-signed certificate is refused.
+#MQTT_TLS=no
 
 # Topics: <TOPIC_PREFIX>/<DEVICE_ID>/now_playing, .../last_session, .../session, .../status,
 # .../screensaver, .../activity, .../cabinet
