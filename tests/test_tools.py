@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import json
 import re
 
 import pytest
 from mcp import Client
 
 from batocera_mcp import server
+from batocera_mcp.client import Game
 
 pytestmark = pytest.mark.anyio
 
@@ -712,3 +714,78 @@ async def test_unreachable_cabinet(settings, monkeypatch):
         assert s["reachable"] is False and "public web access" in s["error"]
         r = await c.call_tool("quit_game", {})
         assert r.is_error
+
+
+# --- Resources and prompts -------------------------------------------------------------
+
+
+async def test_static_resources_are_listed(mcp_client):
+    uris = {str(r.uri) for r in (await mcp_client.list_resources()).resources}
+    assert {"batocera://systems", "batocera://status"} <= uris
+
+
+async def test_games_resource_is_a_template(mcp_client):
+    templates = {t.uri_template for t in (await mcp_client.list_resource_templates()).resource_templates}
+    assert "batocera://games/{system}" in templates
+
+
+async def test_systems_resource_matches_the_list_systems_tool(mcp_client):
+    data = json.loads((await mcp_client.read_resource("batocera://systems")).contents[0].text)
+    tool = (await call(mcp_client, "list_systems")).structured_content
+    assert data == tool
+
+
+async def test_status_resource_reports_the_cabinet(mcp_client):
+    data = json.loads((await mcp_client.read_resource("batocera://status")).contents[0].text)
+    assert data["reachable"] is True
+    assert data["dry_run"] is False
+
+
+async def test_games_resource_lists_one_system_sorted_without_rom_paths(mcp_client, cabinet):
+    text = (await mcp_client.read_resource("batocera://games/snes")).contents[0].text
+    games = json.loads(text)
+    assert len(games) == len(cabinet.library["snes"])
+    names = [g["name"].lower() for g in games]
+    assert names == sorted(names)
+    # Only the sanitized Game fields come out, and no raw ROM path appears anywhere in the payload.
+    assert all(set(g) <= set(Game.__annotations__) for g in games)
+    assert "path" not in text
+    for raw in cabinet.library["snes"]:
+        assert raw["path"] not in text
+
+
+async def test_games_resource_refuses_a_bad_system_name(mcp_client):
+    with pytest.raises(Exception, match="isn't a system name"):
+        await mcp_client.read_resource("batocera://games/snes!")
+
+
+async def test_games_resource_refuses_a_non_game_system(mcp_client):
+    with pytest.raises(Exception, match="not a game system"):
+        await mcp_client.read_resource("batocera://games/imageviewer")
+
+
+async def test_prompts_are_listed(mcp_client):
+    names = {p.name for p in (await mcp_client.list_prompts()).prompts}
+    assert {"recommend_game", "diagnose_cabinet"} <= names
+
+
+async def test_recommend_game_prompt_fills_in_genre_and_players(mcp_client):
+    result = await mcp_client.get_prompt("recommend_game", {"genre": "Fighting", "players": "2"})
+    body = result.messages[0].content.text
+    assert "find_games" in body
+    assert "genre='Fighting'" in body and "players='2'" in body
+    assert "3 retro games" in body
+
+
+async def test_recommend_game_prompt_defaults_to_one_player(mcp_client):
+    result = await mcp_client.get_prompt("recommend_game", {"genre": "Platform"})
+    assert "players='1'" in result.messages[0].content.text
+
+
+async def test_diagnose_cabinet_prompt_points_at_doctor_and_settings(mcp_client):
+    result = await mcp_client.get_prompt("diagnose_cabinet", {})
+    body = result.messages[0].content.text
+    assert "get_status" in body
+    assert "mcp-server-batocera doctor" in body
+    assert "Enable public web access" in body
+    assert "batocera.conf" in body
