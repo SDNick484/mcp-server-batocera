@@ -20,6 +20,7 @@ import asyncio
 import json
 import logging
 import time
+from collections import defaultdict
 from typing import Any
 
 import httpx
@@ -166,7 +167,13 @@ class EmulationStationClient:
         # system -> (fetched_at, {game id: raw game JSON})
         self._games: dict[str, tuple[float, dict[str, dict[str, Any]]]] = {}
         self._systems: tuple[float, list[dict[str, Any]]] | None = None
+        # _lock guards _games itself and is never held across network I/O. _system_locks serialize
+        # fetches of one system, so concurrent callers for the same system share one HTTP request while
+        # different systems load in parallel (find_games caps that at 2).
         self._lock = asyncio.Lock()
+        self._system_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+        # Bumped by invalidate(): a fetch that started before an invalidate() must not cache its result.
+        self._generation = 0
 
     async def aclose(self) -> None:
         await self._http.aclose()
@@ -174,6 +181,7 @@ class EmulationStationClient:
     def invalidate(self) -> None:
         self._games.clear()
         self._systems = None
+        self._generation += 1
 
     async def request(self, method: str, path: str, body: str | None = None) -> httpx.Response:
         url = self.settings.url
@@ -245,10 +253,13 @@ class EmulationStationClient:
 
     async def games(self, system: str, fresh: bool = False) -> dict[str, dict[str, Any]]:
         """All games in one system, by id. Cached: MAME's list can be thousands of entries."""
-        async with self._lock:
-            cached = self._games.get(system)
-            if cached and not fresh and time.monotonic() - cached[0] < GAMES_CACHE_TTL_S:
-                return cached[1]
+        async with self._system_locks[system]:
+            # A caller that waited here behind another fetch of this system finds its result cached.
+            async with self._lock:
+                cached = self._games.get(system)
+                if cached and not fresh and time.monotonic() - cached[0] < GAMES_CACHE_TTL_S:
+                    return cached[1]
+                generation = self._generation
             resp = await self.request("GET", f"/systems/{system}/games")
             if resp.status_code == 404:
                 raise BatoceraError(f"No system named {system!r}. Use list_systems to see the names.")
@@ -257,7 +268,9 @@ class EmulationStationClient:
             except json.JSONDecodeError as exc:
                 raise BatoceraError(f"EmulationStation sent a game list that isn't JSON for {system}") from exc
             games = {g["id"]: g for g in data if isinstance(g, dict) and isinstance(g.get("id"), str)}
-            self._games[system] = (time.monotonic(), games)
+            async with self._lock:
+                if generation == self._generation:  # else reload_games ran mid-fetch: this list may be stale
+                    self._games[system] = (time.monotonic(), games)
             return games
 
     async def find_game(self, system: str, gid: str) -> dict[str, Any]:

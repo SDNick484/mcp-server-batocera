@@ -72,7 +72,9 @@ class _Proto(asyncio.DatagramProtocol):
 
 
 class RetroArchClient:
-    reply_timeout_s = 1.5
+    # A LAN round trip is a few ms; no reply means a standalone emulator or network commands off, and
+    # get_status shouldn't wait long to learn that.
+    reply_timeout_s = 0.4
 
     def __init__(self, host: str, port: int) -> None:
         self.host = host
