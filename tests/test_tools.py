@@ -30,9 +30,11 @@ ALL_TOOLS = {
     "load_state",
     "take_screenshot",
     "reset_game",
+    "adjust_volume",
+    "change_save_slot",
 }
 ACTIONS = {"launch_game", "quit_game", "show_message", "reload_games", "pause_game", "save_state", "load_state",
-           "take_screenshot", "reset_game"}  # fmt: skip
+           "take_screenshot", "reset_game", "adjust_volume", "change_save_slot"}  # fmt: skip
 
 
 @pytest.fixture
@@ -457,6 +459,90 @@ async def test_state_screenshot_reset(mcp_client, cabinet):
     assert await ra_received(cabinet, 4) == ["SAVE_STATE", "LOAD_STATE", "SCREENSHOT", "RESET"]
 
 
+@pytest.mark.parametrize(
+    ("args", "expected"),
+    [
+        ({"action": "up"}, "VOLUME_UP"),
+        ({"action": "down"}, "VOLUME_DOWN"),
+        ({"action": "mute"}, "MUTE"),
+    ],
+)
+async def test_adjust_volume_sends_retroarch_command(mcp_client, cabinet, args, expected):
+    # ASSUMPTION B-RA-AUDIO-SLOT: RetroArch's names; VOLUME_PLUS/MINUS would be ignored silently.
+    cabinet.play("snes")
+    r = await act(mcp_client, "adjust_volume", **args)
+    assert r["outcome"] == "done" and r["sent"] == [f"UDP {expected}"]
+    assert "Super Mario World (USA)" in r["detail"]
+    assert await ra_received(cabinet, 1) == [expected]
+    assert cabinet.ra_received == ["GET_STATUS", expected]  # checked a game runs, then sent the command
+
+
+async def test_adjust_volume_changes_the_simulated_volume(mcp_client, cabinet):
+    cabinet.play("snes")
+    for action in ("up", "up", "down", "mute"):
+        await act(mcp_client, "adjust_volume", action=action)
+    assert await ra_received(cabinet, 4) == ["VOLUME_UP", "VOLUME_UP", "VOLUME_DOWN", "MUTE"]
+    assert (cabinet.ra_volume_db, cabinet.ra_muted) == (0.5, True)
+    await act(mcp_client, "adjust_volume", action="mute")  # a toggle: the second one unmutes
+    await ra_received(cabinet, 5)
+    assert cabinet.ra_muted is False
+
+
+@pytest.mark.parametrize(("direction", "expected"), [("next", "STATE_SLOT_PLUS"), ("previous", "STATE_SLOT_MINUS")])
+async def test_change_save_slot_sends_retroarch_command(mcp_client, cabinet, direction, expected):
+    # ASSUMPTION B-RA-AUDIO-SLOT
+    cabinet.play("snes")
+    r = await act(mcp_client, "change_save_slot", direction=direction)
+    assert r["outcome"] == "done" and r["sent"] == [f"UDP {expected}"]
+    assert await ra_received(cabinet, 1) == [expected]
+    assert cabinet.ra_received == ["GET_STATUS", expected]
+
+
+async def test_save_slot_moves_and_save_state_follows(mcp_client, cabinet):
+    cabinet.play("snes")
+    await act(mcp_client, "change_save_slot", direction="next")
+    await act(mcp_client, "change_save_slot", direction="next")
+    await act(mcp_client, "save_state")
+    assert await ra_received(cabinet, 3) == ["STATE_SLOT_PLUS", "STATE_SLOT_PLUS", "SAVE_STATE"]
+    assert cabinet.ra_slot == 2
+    for _ in range(4):  # down past 0 stops at Auto (-1)
+        await act(mcp_client, "change_save_slot", direction="previous")
+    await ra_received(cabinet, 7)
+    assert cabinet.ra_slot == -1
+
+
+@pytest.mark.parametrize(
+    ("tool", "args"),
+    [("adjust_volume", {"action": "up"}), ("adjust_volume", {"action": "mute"}),
+     ("change_save_slot", {"direction": "next"})],
+)  # fmt: skip
+async def test_audio_and_slot_tools_need_a_game(mcp_client, cabinet, tool, args):
+    # Nothing running at all: RetroArch isn't there to answer GET_STATUS.
+    r = await call(mcp_client, tool, **args)
+    assert r.is_error and "isn't answering" in text(r)
+    # RetroArch open with no content.
+    cabinet.play("snes")
+    cabinet.ra_state = "CONTENTLESS"
+    r = await call(mcp_client, tool, **args)
+    assert r.is_error and "no game loaded" in text(r)
+    # A standalone emulator (Dolphin) doesn't take network commands either.
+    cabinet.play("gamecube")
+    r = await call(mcp_client, tool, **args)
+    assert r.is_error and "standalone emulators" in text(r)
+    assert cabinet.ra_commands == []
+
+
+async def test_audio_and_slot_tools_reject_other_values(mcp_client, cabinet):
+    cabinet.play("snes")
+    t = await tools(mcp_client)
+    assert t["adjust_volume"].input_schema["properties"]["action"]["enum"] == ["up", "down", "mute"]
+    assert t["change_save_slot"].input_schema["properties"]["direction"]["enum"] == ["next", "previous"]
+    for tool, args in (("adjust_volume", {"action": "VOLUME_PLUS"}), ("change_save_slot", {"direction": "QUIT"})):
+        r = await call(mcp_client, tool, **args)
+        assert r.is_error, tool
+    assert cabinet.ra_commands == []
+
+
 async def test_retroarch_not_answering_explains_how_to_enable(mcp_client, cabinet):
     # ASSUMPTION B-RA-ENABLE
     cabinet.play("snes")
@@ -486,10 +572,26 @@ async def test_dry_run_reads_but_sends_nothing(dry_client, cabinet):
     for tool in ("quit_game", "save_state", "load_state", "take_screenshot", "reset_game"):
         assert (await act(dry_client, tool))["outcome"] == "dry_run", tool
     assert (await act(dry_client, "pause_game", paused=True))["outcome"] == "dry_run"
+    for action in ("up", "down", "mute"):
+        r = await act(dry_client, "adjust_volume", action=action)
+        assert r["outcome"] == "dry_run" and r["detail"].startswith("DRY RUN, nothing sent: would "), action
+    for direction, cmd in (("next", "STATE_SLOT_PLUS"), ("previous", "STATE_SLOT_MINUS")):
+        r = await act(dry_client, "change_save_slot", direction=direction)
+        assert (r["outcome"], r["sent"]) == ("dry_run", [f"UDP {cmd}"])
     changing = [
         r for r in cabinet.requests if r[1] in ("/launch", "/emukill", "/notify", "/messagebox", "/reloadgames")
     ]
     assert changing == [] and cabinet.ra_commands == [] and cabinet.running["id"] == smw["id"]
+    assert (cabinet.ra_volume_db, cabinet.ra_muted, cabinet.ra_slot) == (0.0, False, 0)
+
+
+async def test_dry_run_audio_and_slot_still_need_a_game(dry_client, cabinet):
+    # Dry run still reads (GET_STATUS), so it reports the same error a real call would.
+    r = await call(dry_client, "adjust_volume", action="up")
+    assert r.is_error and "isn't answering" in text(r)
+    r = await call(dry_client, "change_save_slot", direction="next")
+    assert r.is_error and "isn't answering" in text(r)
+    assert cabinet.ra_commands == []
 
 
 # --- Faults -------------------------------------------------------------------------------

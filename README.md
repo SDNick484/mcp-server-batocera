@@ -203,6 +203,8 @@ To use it as a connector, with cloudflared running on the same machine (keep the
 | `load_state`      | Load from the current slot (RetroArch, **destructive**)                                       |
 | `take_screenshot` | Save a screenshot on the cabinet (RetroArch)                                                  |
 | `reset_game`      | Reset the game (RetroArch, **destructive**)                                                   |
+| `adjust_volume`   | Volume up or down one step (0.5 dB), or toggle mute (RetroArch)                               |
+| `change_save_slot` | Next or previous save-state slot, used by `save_state` / `load_state` (RetroArch)           |
 
 Play counts and play time come from EmulationStation itself (it records them in its game lists), so
 "what have we played most?" works without Home Assistant.
@@ -327,7 +329,7 @@ Every Batocera behavior the code relies on is listed in `src/batocera_mcp/assump
 source and how sure we are; the code cites each id where it depends on it, and
 [HARDWARE_VALIDATION.md](HARDWARE_VALIDATION.md) has the step that confirms it. *high* means read
 directly in the code that implements it; *medium* means read in source but dependent on settings,
-timing or versions; *low* means our own guess. Hardware results are from Batocera 43 (2026-10-21 to 2026-10-24); every assumption except `B-PT-LIFECYCLE` is confirmed.
+timing or versions; *low* means our own guess. Hardware results are from Batocera 43 (2026-10-21 to 2026-10-24); every assumption except `B-PT-LIFECYCLE` and `B-RA-AUDIO-SLOT` is confirmed.
 
 | Assumption | Confidence | Status |
 |---|---|---|
@@ -344,6 +346,7 @@ timing or versions; *low* means our own guess. Hardware results are from Batocer
 | `B-RA-ENABLE` | medium | hardware-verified |
 | `B-RA-STATUS` | medium | hardware-verified |
 | `B-RA-COMMANDS` | medium | hardware-verified |
+| `B-RA-AUDIO-SLOT` | medium | simulator-only |
 | `B-PT-SCRIPTS` | high | hardware-verified |
 | `B-PT-GAME-ARGS` | high | hardware-verified |
 | `B-PT-SCREENSAVER` | high | hardware-verified |

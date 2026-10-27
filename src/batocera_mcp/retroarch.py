@@ -1,4 +1,5 @@
-"""RetroArch network commands over UDP: pause, save/load state, screenshot, reset, on-screen text.
+"""RetroArch network commands over UDP: pause, save/load state, screenshot, reset, volume, mute, save
+slot, on-screen text.
 
 RetroArch listens on UDP 55355 when ``network_cmd_enable`` is on (on Batocera:
 ``global.retroarch.network_cmd_enable=true`` in batocera.conf). Commands are
@@ -26,7 +27,23 @@ from .config import CONTROL_CHARS
 
 log = logging.getLogger(__name__)
 
-COMMANDS = frozenset({"GET_STATUS", "PAUSE_TOGGLE", "SAVE_STATE", "LOAD_STATE", "SCREENSHOT", "RESET"})
+# ASSUMPTION B-RA-AUDIO-SLOT: RetroArch's names are VOLUME_UP/VOLUME_DOWN (command.h has no VOLUME_PLUS or
+# VOLUME_MINUS, and it ignores names it doesn't know without replying, so a wrong one would fail silently).
+COMMANDS = frozenset(
+    {
+        "GET_STATUS",
+        "PAUSE_TOGGLE",
+        "SAVE_STATE",
+        "LOAD_STATE",
+        "SCREENSHOT",
+        "RESET",
+        "VOLUME_UP",
+        "VOLUME_DOWN",
+        "MUTE",
+        "STATE_SLOT_PLUS",
+        "STATE_SLOT_MINUS",
+    }
+)
 
 # ASSUMPTION B-RA-ENABLE: batocera.conf's global.retroarch.network_cmd_enable=true turns this on.
 NOT_ANSWERING = (
