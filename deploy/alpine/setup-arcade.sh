@@ -43,7 +43,7 @@ for s in $SERVERS; do
 	esac
 done
 
-apk add --no-cache git >/dev/null
+apk add --no-cache git curl >/dev/null
 mkdir -p /srv/src
 
 for s in $SERVERS; do
@@ -110,8 +110,15 @@ for s in $SERVERS; do
 	ok=no
 	if rc-service "mcp-server-$s" restart; then
 		# /healthz answers before any auth, so this works with or without Access configured.
+		# A service whose backend is currently unreachable answers 503 ("degraded"); both 200 and 503
+		# prove the HTTP service came up and answers requests.
 		for _ in $(seq 50); do
-			if wget -q -O /dev/null "http://$host:$port/healthz" 2>/dev/null; then ok=yes && break; fi
+			if command -v curl >/dev/null 2>&1; then
+				code=$(curl -s -o /dev/null -w '%{http_code}' "http://$host:$port/healthz" 2>/dev/null || true)
+				if [ "$code" = "200" ] || [ "$code" = "503" ]; then ok=yes && break; fi
+			elif wget -q -O /dev/null "http://$host:$port/healthz" 2>/dev/null; then
+				ok=yes && break
+			fi
 			sleep 0.2
 		done
 	fi
