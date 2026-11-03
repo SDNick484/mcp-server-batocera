@@ -17,7 +17,7 @@ Safety shape (the same idea as the Shield's key and app allow-lists):
     ``/addgames``, ``/removegames``, metadata and media POSTs, ``/input`` and
     ``/storage/event`` are not reachable from here.
   - **RetroArch gets constants only**, plus SHOW_MSG with validated text.
-  - The destructive tools (quit_game, load_state, reset_game) lose unsaved
+  - The destructive tools (batocera_quit_game, batocera_load_state, batocera_reset_game) lose unsaved
     progress, so they carry destructive_hint=True and clients ask first.
 """
 
@@ -31,20 +31,38 @@ from contextlib import asynccontextmanager
 from typing import Annotated, Any, Literal, TypeVar
 
 from mcp.server import MCPServer
-from mcp.types import ToolAnnotations
 from pydantic import Field
 from typing_extensions import TypedDict
 
 from . import config as cfg
 from .client import BatoceraError, EmulationStationClient, Game, GameDetails, System, to_details, to_game, to_system
 from .config import load_settings
+from .logsafe import mask_url
+from .ratelimit import TokenBucket, refusal
 from .retroarch import RetroArchClient, RetroArchStatus
+from .tools import ACT, ACT_IDEMPOTENT, DESTRUCTIVE, READ_ONLY
 
 log = logging.getLogger(__name__)
 
 LAUNCH_TIMEOUT_S = 20.0
 QUIT_TIMEOUT_S = 10.0
 POLL_INTERVAL_S = 0.5
+
+# Hardware rate limiters:
+# 1. Rescan game lists: hammering disk / metadata reload across ROM folders
+_RELOAD_BUCKET = TokenBucket(capacity=1.0, rate=1.0 / 60.0)
+# 2. Launch / quit game: emulator process fork / kill storms (/emukill), display/audio driver lockup
+_LAUNCH_BUCKET = TokenBucket(capacity=2.0, rate=1.0 / 15.0)
+# 3. Save / load state / reset: rapid UDP 55355 state writes to flash/storage
+_STATE_BUCKET = TokenBucket(capacity=3.0, rate=1.0 / 5.0)
+
+
+def reset_rate_limiters() -> None:
+    """Reset token buckets to full capacity (used in test fixtures)."""
+    _RELOAD_BUCKET.tokens = _RELOAD_BUCKET.capacity
+    _LAUNCH_BUCKET.tokens = _LAUNCH_BUCKET.capacity
+    _STATE_BUCKET.tokens = _STATE_BUCKET.capacity
+
 
 _es: EmulationStationClient | None = None
 _ra: RetroArchClient | None = None
@@ -79,19 +97,15 @@ mcp = MCPServer(
         "Controls a Batocera retro-gaming cabinet through its EmulationStation frontend: browse systems and "
         "games, see what is playing, launch or quit a game, and show messages on screen. While a RetroArch "
         "(libretro) game runs, it can also pause, save or load state, take a screenshot, or reset. "
-        "Call get_status first. To launch a game, find its id with find_games, then call launch_game. "
-        "Only one game runs at a time: quit_game ends the current one and loses unsaved progress, so confirm "
-        "with the user before quitting a game someone may be playing."
+        "In the cabinet signal chain, the Batocera PC acts as the Video and Audio Source feeding HDMI into "
+        "the AV Receiver (Onkyo) or TV (LG webOS). Game launch events automatically trigger dynamic marquee "
+        "artwork updates on Pixelcade LED marquees. Play session tracking automatically publishes MQTT events "
+        "to Home Assistant ('batocera/now_playing'). "
+        "Call batocera_get_status first. To launch a game, find its id with batocera_find_games, then call "
+        "batocera_launch_game. Only one game runs at a time: batocera_quit_game ends the current one and loses "
+        "unsaved progress, so confirm with the user before quitting a game someone may be playing."
     ),
     lifespan=lifespan,
-)
-
-_READ = ToolAnnotations(read_only_hint=True, open_world_hint=False)
-_ACT = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=False)
-_SET = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False)
-# Quitting, loading a state and resetting all throw away unsaved progress.
-_LOSES_PROGRESS = ToolAnnotations(
-    read_only_hint=False, destructive_hint=True, idempotent_hint=False, open_world_hint=False
 )
 
 T = TypeVar("T")
@@ -105,10 +119,10 @@ def _check(fn: Callable[..., T], *args: object) -> T:
 
 
 SystemArg = Annotated[
-    str, Field(min_length=1, max_length=40, description="System name from list_systems, e.g. 'snes', 'mame'.")
+    str, Field(min_length=1, max_length=40, description="System name from batocera_list_systems, e.g. 'snes', 'mame'.")
 ]
 GameIdArg = Annotated[
-    str, Field(min_length=32, max_length=32, description="The game's id from find_games (32 hex characters).")
+    str, Field(min_length=32, max_length=32, description="The game's id from batocera_find_games (32 hex characters).")
 ]
 
 
@@ -124,12 +138,18 @@ class Status(TypedDict):
     retroarch: RetroArchStatus | None
 
 
-@mcp.tool(title="Get Batocera status", annotations=_READ)
-async def get_status() -> Status:
-    """Report whether the cabinet's EmulationStation is reachable, which game is running (if any), and whether
-    EmulationStation is busy (scraping, updating). While a RetroArch game runs, retroarch says whether it is
-    playing or paused; it is null for standalone emulators or when RetroArch network commands are off.
-    dry_run true means actions are reported, not sent.
+@mcp.tool(title="Get Batocera status", annotations=READ_ONLY)
+async def batocera_get_status() -> Status:
+    """
+    <use_case>
+    Report whether the cabinet's EmulationStation is reachable, which game is running (if any),
+    and whether EmulationStation is busy (scraping, updating).
+    </use_case>
+    <important_notes>
+    - Start here. Reports network URL, reachability, ES version, and RetroArch play/pause state.
+    - While a RetroArch game runs, retroarch reports whether it is playing or paused; null for standalone emulators.
+    - dry_run true indicates actions are simulated and not sent to the cabinet.
+    </important_notes>
     """
     c = es()
     try:
@@ -138,7 +158,7 @@ async def get_status() -> Status:
         idle = await c.is_idle()
     except BatoceraError as exc:
         return Status(
-            url=c.settings.url,
+            url=mask_url(c.settings.url),
             dry_run=c.settings.dry_run,
             reachable=False,
             error=str(exc),
@@ -148,7 +168,7 @@ async def get_status() -> Status:
             retroarch=None,
         )
     return Status(
-        url=c.settings.url,
+        url=mask_url(c.settings.url),
         dry_run=c.settings.dry_run,
         reachable=True,
         error=None,
@@ -164,36 +184,40 @@ class SystemList(TypedDict):
     total_games: int
 
 
-@mcp.tool(title="List game systems", annotations=_READ)
-async def list_systems() -> SystemList:
-    """List the game systems that have games, with game counts, how many have been played, favorites, and
-    each system's most played game. The name field is what other tools take as system.
+@mcp.tool(title="List game systems", annotations=READ_ONLY)
+async def batocera_list_systems() -> SystemList:
     """
-    systems = [to_system(s) for s in await es().game_systems()]
+    <use_case>
+    List the game systems configured on the cabinet with ROMs.
+    </use_case>
+    <important_notes>
+    - Returns game counts, favorites, and most played game for each system.
+    - The name field (e.g. 'snes', 'mame') is used as system argument in other tools.
+    </important_notes>
+    """
+    raw = await es().game_systems()
+    systems = [to_system(s) for s in raw]
     systems.sort(key=lambda s: s["full_name"].lower())
-    return SystemList(systems=systems, total_games=sum(s["games"] for s in systems))
+    total = sum(s["games"] for s in systems)
+    return SystemList(systems=systems, total_games=total)
 
 
-_WORD = re.compile(r"[a-z0-9]+")
+_WORD = re.compile(r"[\w]+", re.UNICODE)
 
 
-def _words(text: str) -> list[str]:
-    return _WORD.findall(text.lower())
+def _words(q: str) -> list[str]:
+    return [w.lower() for w in _WORD.findall(q)]
 
 
 def _match_score(name: str, query_words: list[str]) -> int | None:
-    """0 exact name, 1 name starts with the query, 2 every query word starts some word of the name;
-    None for no match. Case and punctuation are ignored: 'pac man' matches 'Pac-Man'."""
-    words = _words(name)
-    joined = " ".join(words)
-    q = " ".join(query_words)
-    if joined == q:
-        return 0
-    if joined.startswith(q):
-        return 1
-    if all(any(w.startswith(qw) for w in words) for qw in query_words):
-        return 2
-    return None
+    lower = name.lower()
+    score = 0
+    for w in query_words:
+        pos = lower.find(w)
+        if pos == -1:
+            return None
+        score += pos + 1
+    return score
 
 
 class GameList(TypedDict):
@@ -202,8 +226,8 @@ class GameList(TypedDict):
     truncated: bool
 
 
-@mcp.tool(title="Find games", annotations=_READ)
-async def find_games(
+@mcp.tool(title="Find games", annotations=READ_ONLY)
+async def batocera_find_games(
     query: Annotated[
         str | None,
         Field(default=None, max_length=100, description="Words from the game's name, e.g. 'mario world'."),
@@ -216,8 +240,14 @@ async def find_games(
     favorites_only: bool = False,
     limit: Annotated[int, Field(ge=1, le=100)] = 20,
 ) -> GameList:
-    """Search the cabinet's games by name, optionally within one system, or list favorites, most played or
-    recently played games. Each result's id and system are what launch_game and get_game take.
+    """
+    <use_case>
+    Search the cabinet's game catalog by title, system, or play history.
+    </use_case>
+    <important_notes>
+    - Returns matches with 32-character game_id needed for batocera_launch_game and batocera_get_game.
+    - Supports sorting by relevance, name, most_played, most_time, or recently_played.
+    </important_notes>
     """
     c = es()
     names = [_check(cfg.system_name, system)] if system else [str(s.get("name")) for s in await c.game_systems()]
@@ -260,19 +290,23 @@ async def find_games(
     return GameList(matches=len(games_out), games=games_out[:limit], truncated=len(games_out) > limit)
 
 
-@mcp.tool(title="Get game details", annotations=_READ)
-async def get_game(system: SystemArg, game_id: GameIdArg) -> GameDetails:
-    """Full details for one game: description, developer, publisher, rating, players, play count and time."""
+@mcp.tool(title="Get game details", annotations=READ_ONLY)
+async def batocera_get_game(system: SystemArg, game_id: GameIdArg) -> GameDetails:
+    """
+    <use_case>
+    Retrieve full metadata for a specific game.
+    </use_case>
+    <important_notes>
+    - Returns developer, publisher, rating, players, play count, and play time.
+    - Requires system name and 32-hex game_id from batocera_find_games.
+    </important_notes>
+    """
     s = _check(cfg.system_name, system)
     gid = _check(cfg.game_id, game_id)
     return to_details(await es().find_game(s, gid))
 
 
 # --- Acting --------------------------------------------------------------------
-# Every tool that changes something returns an ActionResult, the same shape as the
-# sibling servers' (Shield, Onkyo, Harmony, Sofabaton): structured, so a client can
-# read `outcome` and `sent` without parsing prose, with `detail` one sentence for the
-# user. Failures aren't an outcome: they're isError results (BatoceraError).
 Outcome = Literal["done", "unchanged", "dry_run"]
 
 
@@ -312,10 +346,17 @@ async def _wait_for(check: Callable[[], Any], timeout: float) -> Any:
         await asyncio.sleep(POLL_INTERVAL_S)
 
 
-@mcp.tool(title="Launch a game", annotations=_SET)
-async def launch_game(system: SystemArg, game_id: GameIdArg) -> ActionResult:
-    """Start a game on the cabinet (find its id with find_games). Refuses if a different game is already
-    running: quit_game first, after checking with the user. Succeeds only once the game is confirmed running.
+@mcp.tool(title="Launch a game", annotations=ACT_IDEMPOTENT)
+async def batocera_launch_game(system: SystemArg, game_id: GameIdArg) -> ActionResult:
+    """
+    <use_case>
+    Launch a game on the arcade cabinet screen.
+    </use_case>
+    <important_notes>
+    - Refuses if another game is already running; call batocera_quit_game first.
+    - Rate-limited to prevent emulator process fork storms and audio lockups.
+    - Automatically triggers Pixelcade marquee updates if connected.
+    </important_notes>
     """
     c = es()
     s = _check(cfg.system_name, system)
@@ -323,13 +364,17 @@ async def launch_game(system: SystemArg, game_id: GameIdArg) -> ActionResult:
     raw = await c.find_game(s, gid)
     name = raw.get("name", gid)
 
+    wait = _LAUNCH_BUCKET.take(1.0)
+    if wait > 0:
+        raise BatoceraError(refusal(f"launch {name}", wait, c.settings.name or "Batocera cabinet"))
+
     running = await c.running_game()
     if running:
         if running.get("id") == gid:
             return _result(f"{name} is already running.", [], "unchanged")
         raise BatoceraError(
             f"{running.get('name', 'Another game')} ({running.get('systemName', '?')}) is running. "
-            "Quit it with quit_game first (ask the user: unsaved progress is lost)."
+            "Quit it with batocera_quit_game first (ask the user: unsaved progress is lost)."
         )
 
     path = raw.get("path")
@@ -353,17 +398,27 @@ async def launch_game(system: SystemArg, game_id: GameIdArg) -> ActionResult:
         raise BatoceraError(f"Something else started instead: {other.get('name')}.")
     raise BatoceraError(
         f"EmulationStation accepted the request but {name} didn't start within {LAUNCH_TIMEOUT_S:g}s. "
-        "A popup (show_message style=popup), dialog or menu may be open on the cabinet: the game starts once "
+        "A popup (batocera_show_message style=popup), dialog or menu may be open on the cabinet: the game starts once "
         "someone closes it. Otherwise the emulator failed to start (check the screen)."
     )
 
 
-@mcp.tool(title="Quit the running game", annotations=_LOSES_PROGRESS)
-async def quit_game() -> ActionResult:
-    """Quit the running game and return to EmulationStation. Unsaved progress is lost: ask first if someone
-    may be playing (use save_state first for a RetroArch game if they want to keep it).
+@mcp.tool(title="Quit the running game", annotations=DESTRUCTIVE)
+async def batocera_quit_game() -> ActionResult:
+    """
+    <use_case>
+    Terminate the currently running game emulator and return to EmulationStation menu.
+    </use_case>
+    <important_notes>
+    - DESTRUCTIVE: Unsaved game progress will be lost. Ask user confirmation before calling.
+    - Rate-limited to protect emulator process management and display drivers.
+    </important_notes>
     """
     c = es()
+    wait = _LAUNCH_BUCKET.take(1.0)
+    if wait > 0:
+        raise BatoceraError(refusal("quit running game", wait, c.settings.name or "Batocera cabinet"))
+
     running = await c.running_game()
     if running is None:
         return _result("No game is running.", [], "unchanged")
@@ -381,8 +436,8 @@ async def quit_game() -> ActionResult:
     raise BatoceraError(f"Asked the emulator to stop, but {name} is still running after {QUIT_TIMEOUT_S:g}s.")
 
 
-@mcp.tool(title="Show a message on screen", annotations=_ACT)
-async def show_message(
+@mcp.tool(title="Show a message on screen", annotations=ACT)
+async def batocera_show_message(
     text: Annotated[str, Field(min_length=1, max_length=300)],
     style: Annotated[
         Literal["auto", "notification", "popup"],
@@ -392,7 +447,15 @@ async def show_message(
         ),
     ] = "auto",
 ) -> ActionResult:
-    """Show a message on the cabinet's screen, e.g. 'Dinner in 5 minutes!'."""
+    """
+    <use_case>
+    Display an on-screen notification or popup dialog on the cabinet screen.
+    </use_case>
+    <important_notes>
+    - style='auto' displays an in-game HUD overlay if RetroArch is active, or frontend banner otherwise.
+    - style='popup' halts game launch until acknowledged by a button press on the cabinet.
+    </important_notes>
+    """
     t = _check(cfg.message_text, text)
     c = es()
     if style == "auto" and await c.running_game():
@@ -418,23 +481,43 @@ async def show_message(
     result = _result("Shown as a popup." if popup else "Shown as a notification.", sent)
     if popup:
         # ASSUMPTION B-ES-LAUNCH: an open popup holds launches until someone presses a button.
-        result["warnings"].append("Until someone presses a button on the cabinet, the popup holds back launch_game.")
+        result["warnings"].append("Until someone presses a button on the cabinet, the popup holds back batocera_launch_game.")
     return result
 
 
-@mcp.tool(title="Rescan game lists", annotations=_SET)
-async def reload_games() -> ActionResult:
-    """Make EmulationStation rescan its game lists, e.g. after ROMs were added to the cabinet or its share."""
+@mcp.tool(title="Rescan game lists", annotations=ACT_IDEMPOTENT)
+async def batocera_reload_games() -> ActionResult:
+    """
+    <use_case>
+    Instruct EmulationStation to rescan storage and reload game lists.
+    </use_case>
+    <important_notes>
+    - Use after adding or removing ROM files.
+    - Strictly rate-limited (1 per 60s) to prevent disk I/O thrashing and UI freezes.
+    </important_notes>
+    """
+    c = es()
+    wait = _RELOAD_BUCKET.take(1.0)
+    if wait > 0:
+        raise BatoceraError(refusal("rescan game lists", wait, c.settings.name or "Batocera cabinet"))
+
     sent = ["GET /reloadgames"]
     if _dry():
         return _result("rescan the game lists", sent, "dry_run")
-    await es().reload_games()
+    await c.reload_games()
     return _result("EmulationStation is reloading its game lists.", sent)
 
 
 # --- RetroArch -------------------------------------------------------------------
 # ASSUMPTION B-RA-COMMANDS: each command does what its name says; only GET_STATUS answers.
-async def _retroarch(command: str, verb: str, done: str) -> ActionResult:
+async def _retroarch(
+    command: str, verb: str, done: str, bucket: TokenBucket | None = _STATE_BUCKET
+) -> ActionResult:
+    if bucket is not None:
+        wait = bucket.take(1.0)
+        if wait > 0:
+            raise BatoceraError(refusal(verb, wait, "Batocera cabinet"))
+
     s = await ra().require_game()
     game = s["game"] or "the game"
     sent = [f"UDP {command}"]
@@ -444,9 +527,17 @@ async def _retroarch(command: str, verb: str, done: str) -> ActionResult:
     return _result(done.format(game=game), sent)
 
 
-@mcp.tool(title="Pause or resume", annotations=_SET)
-async def pause_game(paused: bool) -> ActionResult:
-    """Pause (paused=true) or resume (paused=false) the running RetroArch game."""
+@mcp.tool(title="Pause or resume", annotations=ACT_IDEMPOTENT)
+async def batocera_pause_game(paused: bool) -> ActionResult:
+    """
+    <use_case>
+    Pause or resume the active RetroArch game.
+    </use_case>
+    <important_notes>
+    - Only operates when a libretro/RetroArch game core is currently running.
+    - Idempotent: reports unchanged if already in the target state.
+    </important_notes>
+    """
     r = ra()
     s = await r.require_game()
     if (s["state"] == "paused") == paused:
@@ -462,27 +553,59 @@ async def pause_game(paused: bool) -> ActionResult:
     raise BatoceraError("Sent pause/resume, but RetroArch's state didn't change.")
 
 
-@mcp.tool(title="Save state", annotations=_ACT)
-async def save_state() -> ActionResult:
-    """Save the running RetroArch game's state to its current save slot (overwrites that slot)."""
+@mcp.tool(title="Save state", annotations=ACT)
+async def batocera_save_state() -> ActionResult:
+    """
+    <use_case>
+    Save game progress to the current RetroArch save slot.
+    </use_case>
+    <important_notes>
+    - Overwrites the active save slot on the cabinet storage.
+    - Rate-limited to prevent UDP packet storms and file corruption.
+    </important_notes>
+    """
     return await _retroarch("SAVE_STATE", "save state for", "Saved state for {game} (current slot).")
 
 
-@mcp.tool(title="Load state", annotations=_LOSES_PROGRESS)
-async def load_state() -> ActionResult:
-    """Load the running RetroArch game's state from its current slot. Progress since that save is lost."""
+@mcp.tool(title="Load state", annotations=DESTRUCTIVE)
+async def batocera_load_state() -> ActionResult:
+    """
+    <use_case>
+    Load saved state from the current RetroArch save slot.
+    </use_case>
+    <important_notes>
+    - DESTRUCTIVE: Unsaved progress since the last save will be lost.
+    - Rate-limited to prevent storage and UDP packet collision.
+    </important_notes>
+    """
     return await _retroarch("LOAD_STATE", "load the saved state for", "Loaded the saved state for {game}.")
 
 
-@mcp.tool(title="Take a screenshot", annotations=_ACT)
-async def take_screenshot() -> ActionResult:
-    """Save a screenshot of the running RetroArch game to the cabinet's screenshots folder."""
+@mcp.tool(title="Take a screenshot", annotations=ACT)
+async def batocera_take_screenshot() -> ActionResult:
+    """
+    <use_case>
+    Capture a screenshot of the currently running RetroArch game.
+    </use_case>
+    <important_notes>
+    - Saved directly to /userdata/screenshots on the cabinet.
+    - Only works while a RetroArch core is actively running.
+    </important_notes>
+    """
     return await _retroarch(
-        "SCREENSHOT", "take a screenshot of", "Screenshot of {game} saved in /userdata/screenshots."
+        "SCREENSHOT", "take a screenshot of", "Screenshot of {game} saved in /userdata/screenshots.", bucket=None
     )
 
 
-@mcp.tool(title="Reset the game", annotations=_LOSES_PROGRESS)
-async def reset_game() -> ActionResult:
-    """Reset the running RetroArch game, like pressing the console's reset button. Unsaved progress is lost."""
+@mcp.tool(title="Reset the game", annotations=DESTRUCTIVE)
+async def batocera_reset_game() -> ActionResult:
+    """
+    <use_case>
+    Soft-reset the running RetroArch game emulator.
+    </use_case>
+    <important_notes>
+    - DESTRUCTIVE: Like pressing the physical console reset button; unsaved progress is lost.
+    - Rate-limited to avoid hardware and display strain.
+    </important_notes>
+    """
     return await _retroarch("RESET", "reset", "Reset {game}.")

@@ -41,3 +41,4 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "QUIT_TIMEOUT_S", 0.6)
     monkeypatch.setattr(server, "POLL_INTERVAL_S", 0.02)
     monkeypatch.setattr(RetroArchClient, "reply_timeout_s", 0.3)
+    server.reset_rate_limiters()

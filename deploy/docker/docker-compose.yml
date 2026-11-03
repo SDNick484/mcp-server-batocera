@@ -1,0 +1,13 @@
+services:
+  batocera-mcp:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    image: sdnick484/mcp-server-batocera:latest
+    container_name: mcp-server-batocera
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      - BATOCERA_URL=http://batocera.local:1234
+      - MCP_HTTP_BIND=127.0.0.1
+      - MCP_HTTP_PORT=8717

@@ -21,5 +21,5 @@ async def test_serve_over_stdio(tmp_path):
     env = {**os.environ, "BATOCERA_CONFIG_DIR": str(tmp_path), "BATOCERA_URL": "http://127.0.0.1:9"}
     async with Client(StdioServerParameters(command=exe, args=[], env=env)) as c:
         assert {t.name for t in (await c.list_tools()).tools} == ALL_TOOLS
-        status = (await c.call_tool("get_status", {})).structured_content
+        status = (await c.call_tool("batocera_get_status", {})).structured_content
         assert status["reachable"] is False and "isn't answering" in status["error"]

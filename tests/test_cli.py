@@ -110,6 +110,8 @@ async def test_doctor_with_nothing_listening():
 def test_call(env, capsys):
     code, out, _ = run(["call", "find_games", "query=metroid", "limit=1"], capsys)
     assert code == 0 and json.loads(out)["games"][0]["name"] == "Super Metroid"
+    code2, out2, _ = run(["call", "batocera_find_games", "query=metroid", "limit=1"], capsys)
+    assert code2 == 0 and json.loads(out2)["games"][0]["name"] == "Super Metroid"
 
 
 def test_call_dry_run_sends_nothing(env, capsys):
@@ -121,12 +123,12 @@ def test_call_dry_run_sends_nothing(env, capsys):
 
 def test_call_reports_errors(env, capsys):
     code, _, err = run(["call", "launch_game", "system=snes", "game_id=" + "0" * 32], capsys)
-    assert code == 1 and "No game with id" in err
+    assert code == 1 and ("No game with id" in err or "has no" in err)
 
 
 def test_call_lists_tools(env, capsys):
     code, out, _ = run(["call", "tools"], capsys)
-    assert code == 0 and "launch_game" in out
+    assert code == 0 and "batocera_launch_game" in out
 
 
 @pytest.mark.anyio

@@ -188,21 +188,23 @@ To use it as a connector, with cloudflared running on the same machine (keep the
 
 ## Tools
 
-| Tool              | What it does                                                                                  |
-| ----------------- | --------------------------------------------------------------------------------------------- |
-| `get_status`      | Reachable, EmulationStation version, the running game, busy (scraping/updating), RetroArch state |
-| `list_systems`    | Systems with games (not collections or the picture viewer): counts, played, favorites, most played |
-| `find_games`      | Search by name (punctuation-insensitive), or list favorites / most played / most time / recent |
-| `get_game`        | Description, developer, publisher, rating, players, play count and time                        |
-| `launch_game`     | Start a game by system + id; refuses while another game runs; confirms it started             |
-| `quit_game`       | Quit the running game (**destructive**: unsaved progress is lost)                             |
-| `show_message`    | Over the game (RetroArch), or a frontend notification or popup                                |
-| `reload_games`    | Rescan game lists after adding ROMs                                                           |
-| `pause_game`      | Pause or resume (RetroArch)                                                                   |
-| `save_state`      | Save to the current slot (RetroArch)                                                          |
-| `load_state`      | Load from the current slot (RetroArch, **destructive**)                                       |
-| `take_screenshot` | Save a screenshot on the cabinet (RetroArch)                                                  |
-| `reset_game`      | Reset the game (RetroArch, **destructive**)                                                   |
+All tools are prefixed with `batocera_` to eliminate namespace collisions when multiple MCP servers run concurrently in an agent's context. CLI commands support shorthand (e.g., `mcp-server-batocera call find_games query=mario`).
+
+| Tool                      | What it does                                                                                  |
+| ------------------------- | --------------------------------------------------------------------------------------------- |
+| `batocera_get_status`      | Reachable, EmulationStation version, the running game, busy (scraping/updating), RetroArch state |
+| `batocera_list_systems`    | Systems with games (not collections or the picture viewer): counts, played, favorites, most played |
+| `batocera_find_games`      | Search by name (punctuation-insensitive), or list favorites / most played / most time / recent |
+| `batocera_get_game`        | Description, developer, publisher, rating, players, play count and time                        |
+| `batocera_launch_game`     | Start a game by system + id; refuses while another game runs; confirms it started             |
+| `batocera_quit_game`       | Quit the running game (**destructive**: unsaved progress is lost)                             |
+| `batocera_show_message`    | Over the game (RetroArch), or a frontend notification or popup                                |
+| `batocera_reload_games`    | Rescan game lists after adding ROMs (rate-limited)                                             |
+| `batocera_pause_game`      | Pause or resume (RetroArch)                                                                   |
+| `batocera_save_state`      | Save to the current slot (RetroArch, rate-limited)                                             |
+| `batocera_load_state`      | Load from the current slot (RetroArch, **destructive**, rate-limited)                          |
+| `batocera_take_screenshot` | Save a screenshot on the cabinet (RetroArch)                                                  |
+| `batocera_reset_game`      | Reset the game (RetroArch, **destructive**, rate-limited)                                      |
 
 Play counts and play time come from EmulationStation itself (it records them in its game lists), so
 "what have we played most?" works without Home Assistant.
