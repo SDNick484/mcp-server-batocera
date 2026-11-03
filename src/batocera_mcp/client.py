@@ -28,6 +28,8 @@ from mcp.server.mcpserver.exceptions import ToolError
 from typing_extensions import TypedDict
 
 from .config import NON_GAME_SYSTEMS, Settings
+from .logsafe import mask_ip, mask_url
+from .lookup import unknown_with_suggestions
 
 log = logging.getLogger(__name__)
 
@@ -262,7 +264,12 @@ class EmulationStationClient:
                 generation = self._generation
             resp = await self.request("GET", f"/systems/{system}/games")
             if resp.status_code == 404:
-                raise BatoceraError(f"No system named {system!r}. Use list_systems to see the names.")
+                systems = await self.game_systems()
+                names = [str(s.get("name")) for s in systems]
+                msg = unknown_with_suggestions(
+                    "Cabinet", system, names, fallback="Use batocera_list_systems to see valid systems."
+                )
+                raise BatoceraError(msg)
             try:
                 data = json.loads(resp.text)
             except json.JSONDecodeError as exc:
@@ -279,7 +286,11 @@ class EmulationStationClient:
         if gid not in games:
             games = await self.games(system, fresh=True)
         if gid not in games:
-            raise BatoceraError(f"No game with id {gid} in {system}. Use find_games to look it up again.")
+            raise BatoceraError(
+                unknown_with_suggestions(
+                    f"System {system}", gid, games.keys(), fallback="Use batocera_find_games to look it up again."
+                )
+            )
         return games[gid]
 
     # --- Actions -----------------------------------------------------------
@@ -299,14 +310,16 @@ class EmulationStationClient:
 
 def _connect_advice(url: str, exc: Exception) -> str:
     host = httpx.URL(url).host
+    masked_host = mask_ip(host) if host else host
+    masked_url = mask_url(url)
     msg = str(exc).lower()
     if "name or service not known" in msg or "nodename nor servname" in msg or "getaddrinfo" in msg:
         return (
-            f"Can't resolve {host}. mDNS (.local names) often doesn't cross VLANs or work under WSL2; "
+            f"Can't resolve {masked_host}. mDNS (.local names) often doesn't cross VLANs or work under WSL2; "
             "set BATOCERA_URL to the cabinet's IP address, e.g. http://192.168.1.20:1234."
         )
     return (
-        f"EmulationStation isn't answering at {url}. Is the cabinet on? If it is, public web access is "
+        f"EmulationStation isn't answering at {masked_url}. Is the cabinet on? If it is, public web access is "
         "probably off: EmulationStation only listens on 127.0.0.1 until 'Enable public web access' "
         "(System Settings > Developer) is turned on and the cabinet rebooted."
     )

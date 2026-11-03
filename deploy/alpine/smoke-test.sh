@@ -93,7 +93,7 @@ pid=$(ps -o pid,args | grep '[m]cp-server-batocera serve --http' | awk 'NR==1 {p
 [ -n "$pid" ] && [ "$(stat -c %U "/proc/$pid")" = mcp-batocera ]
 
 STEP='mcp over http'
-# A real MCP session against the service: initialize, then get_status, which must
+# A real MCP session against the service: initialize, then batocera_get_status, which must
 # reach the simulated cabinet (structuredContent is compact JSON: no spaces).
 URL=http://127.0.0.1:8717/batocera/mcp
 H='-H Content-Type:application/json -H Accept:application/json,text/event-stream'
@@ -104,7 +104,7 @@ SID=$(curl -fsS -D - -o /dev/null $H "$URL" -d '{"jsonrpc":"2.0","id":1,"method"
 # shellcheck disable=SC2086
 curl -fsS $H -H "mcp-session-id: $SID" "$URL" -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' >/dev/null
 # shellcheck disable=SC2086
-out=$(curl -fsS $H -H "mcp-session-id: $SID" "$URL" -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_status","arguments":{}}}')
+out=$(curl -fsS $H -H "mcp-session-id: $SID" "$URL" -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"batocera_get_status","arguments":{}}}')
 echo "$out" | tail -c 600
 echo "$out" | grep -q '"reachable":true'
 

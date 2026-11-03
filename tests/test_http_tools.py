@@ -71,9 +71,9 @@ def client(url: str, assertion: str | None) -> Client:
 async def test_tools_work_over_http_with_a_valid_assertion(settings, cabinet, monkeypatch):
     smw = cabinet.game("snes")
     async with serving(settings, monkeypatch) as url, client(url, token()) as c:
-        status = (await c.call_tool("get_status", {})).structured_content
+        status = (await c.call_tool("batocera_get_status", {})).structured_content
         assert (status["reachable"], status["running_game"]) == (True, None)
-        r = (await c.call_tool("launch_game", {"system": "snes", "game_id": smw["id"]})).structured_content
+        r = (await c.call_tool("batocera_launch_game", {"system": "snes", "game_id": smw["id"]})).structured_content
         assert r["outcome"] == "done"
     assert cabinet.running["id"] == smw["id"]
 
@@ -93,7 +93,7 @@ async def test_tools_work_over_http_with_a_valid_assertion(settings, cabinet, mo
 async def test_bad_assertions_never_reach_the_cabinet(settings, cabinet, monkeypatch, assertion):
     async with serving(settings, monkeypatch) as url, httpx2.AsyncClient() as http:
         headers = {remote.ACCESS_HEADER: assertion} if assertion else {}
-        body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "quit_game"}}
+        body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "batocera_quit_game"}}
         resp = await http.post(url, json=body, headers=headers)
         assert (resp.status_code, resp.json()) == (403, {"error": "forbidden"})
     assert cabinet.requests == []  # the cabinet heard nothing
