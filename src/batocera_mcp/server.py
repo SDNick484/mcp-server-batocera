@@ -481,7 +481,9 @@ async def batocera_show_message(
     result = _result("Shown as a popup." if popup else "Shown as a notification.", sent)
     if popup:
         # ASSUMPTION B-ES-LAUNCH: an open popup holds launches until someone presses a button.
-        result["warnings"].append("Until someone presses a button on the cabinet, the popup holds back batocera_launch_game.")
+        result["warnings"].append(
+            "Until someone presses a button on the cabinet, the popup holds back batocera_launch_game."
+        )
     return result
 
 
@@ -510,9 +512,7 @@ async def batocera_reload_games() -> ActionResult:
 
 # --- RetroArch -------------------------------------------------------------------
 # ASSUMPTION B-RA-COMMANDS: each command does what its name says; only GET_STATUS answers.
-async def _retroarch(
-    command: str, verb: str, done: str, bucket: TokenBucket | None = _STATE_BUCKET
-) -> ActionResult:
+async def _retroarch(command: str, verb: str, done: str, bucket: TokenBucket | None = _STATE_BUCKET) -> ActionResult:
     if bucket is not None:
         wait = bucket.take(1.0)
         if wait > 0:

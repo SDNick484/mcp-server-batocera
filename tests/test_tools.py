@@ -224,7 +224,9 @@ async def test_game_list_is_cached(mcp_client, cabinet):
 
 
 async def test_get_game(mcp_client, cabinet):
-    g = (await call(mcp_client, "batocera_get_game", system="snes", game_id=cabinet.game("snes")["id"])).structured_content
+    g = (
+        await call(mcp_client, "batocera_get_game", system="snes", game_id=cabinet.game("snes")["id"])
+    ).structured_content
     assert g["description"] == "Mario's first SNES adventure."
     assert (g["release_date"], g["play_time_s"], g["players"], g["rating"]) == ("1990-11-21", 12600, "1-2", 0.9)
 
@@ -292,7 +294,9 @@ async def test_quit_that_doesnt_stop_says_so(mcp_client, cabinet):
 async def test_message_in_frontend(mcp_client, cabinet):
     # ASSUMPTION B-ES-MESSAGES
     assert (await act(mcp_client, "batocera_show_message", text="Dinner in 5!"))["detail"] == "Shown as a notification."
-    assert (await act(mcp_client, "batocera_show_message", text="Bedtime", style="popup"))["detail"] == "Shown as a popup."
+    assert (await act(mcp_client, "batocera_show_message", text="Bedtime", style="popup"))[
+        "detail"
+    ] == "Shown as a popup."
     assert (cabinet.notifications, cabinet.popups) == (["Dinner in 5!"], ["Bedtime"])
 
 
@@ -414,7 +418,14 @@ async def test_dry_run_reads_but_sends_nothing(dry_client, cabinet):
     await act(dry_client, "batocera_reload_games")
     cabinet.play("snes")
     server.reset_rate_limiters()
-    for tool in ("batocera_quit_game", "batocera_save_state", "batocera_load_state", "batocera_take_screenshot", "batocera_reset_game"):
+    actions = (
+        "batocera_quit_game",
+        "batocera_save_state",
+        "batocera_load_state",
+        "batocera_take_screenshot",
+        "batocera_reset_game",
+    )
+    for tool in actions:
         assert (await act(dry_client, tool))["outcome"] == "dry_run", tool
     assert (await act(dry_client, "batocera_pause_game", paused=True))["outcome"] == "dry_run"
     changing = [

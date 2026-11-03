@@ -255,9 +255,10 @@ class EmulationStationClient:
             if resp.status_code == 404:
                 systems = await self.game_systems()
                 names = [str(s.get("name")) for s in systems]
-                raise BatoceraError(
-                    unknown_with_suggestions("Cabinet", system, names, fallback="Use batocera_list_systems to see valid systems.")
+                msg = unknown_with_suggestions(
+                    "Cabinet", system, names, fallback="Use batocera_list_systems to see valid systems."
                 )
+                raise BatoceraError(msg)
             try:
                 data = json.loads(resp.text)
             except json.JSONDecodeError as exc:
