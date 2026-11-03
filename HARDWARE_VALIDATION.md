@@ -20,6 +20,7 @@ edit this file.
 | `launch_game` (confirmed via /runningGame), `quit_game` | verified on hardware | 3 |
 | `show_message` (frontend notification, popup, over a RetroArch game) | verified on hardware | 4 |
 | RetroArch tools: pause, save/load state, screenshot, reset | verified on hardware | 5 |
+| RetroArch tools: `adjust_volume`, `change_save_slot` | verified against simulator only | 5 |
 | Dry run and ActionResult | verified on hardware | 6 |
 | playtracker install, Home Assistant discovery | verified on hardware | 7 |
 | playtracker sessions and the short-session filter | verified on hardware | 8 |
@@ -115,7 +116,7 @@ Confirms B-ES-MESSAGES.
 
 ## 5. RetroArch
 
-Confirms B-RA-ENABLE, B-RA-STATUS, B-RA-COMMANDS.
+Confirms B-RA-ENABLE, B-RA-STATUS, B-RA-COMMANDS, B-RA-AUDIO-SLOT.
 
 1. With a RetroArch game running and nothing configured yet: `call get_status`. Expect
    `"retroarch": null`, and doctor's `x  retroarch` hint.
@@ -131,6 +132,11 @@ Confirms B-RA-ENABLE, B-RA-STATUS, B-RA-COMMANDS.
 6. `call save_state`, play on a little, `call load_state`: expect to jump back. `call take_screenshot`,
    then check `/userdata/screenshots` over SSH. `call reset_game`. **Record** anything that differs
    (B-RA-COMMANDS).
+7. `call adjust_volume action=down` a few times, then `action=up`: expect the game to get quieter, then
+   louder (0.5 dB a step, so it takes several). `call adjust_volume action=mute` twice: expect mute, then
+   sound again. `call change_save_slot direction=next`: expect RetroArch to show the new slot number;
+   `call save_state` should then save to that slot. From slot 0, `direction=previous` should show Auto.
+   **Record** what shows and how loud a step is (B-RA-AUDIO-SLOT).
 
 ## 6. Dry run
 

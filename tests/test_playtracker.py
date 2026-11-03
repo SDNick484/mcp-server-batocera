@@ -288,6 +288,38 @@ def test_conf_parsing(tmp_path):
     )
 
 
+def test_taking_the_lock_doesnt_rewrite_the_lock_file(tmp_path):
+    # open(..., "w") would truncate (O_TRUNC) on every event: a needless write to the cabinet's storage each
+    # time. Append mode creates the file once and then leaves it alone; flock doesn't care about its contents.
+    lock = tmp_path / "lock"
+    lock.write_text("left by an earlier run\n")
+    with pt.State(tmp_path).locked():
+        assert lock.read_text() == "left by an earlier run\n"
+    assert lock.read_text() == "left by an earlier run\n"
+
+
+def test_state_writes_use_a_temp_file_per_process(tmp_path, monkeypatch):
+    # ES runs this script concurrently. With a shared "session.tmp", two runs writing the same name could
+    # interleave: one renames the other's half-written file into place. A PID in the name keeps them apart.
+    state = pt.State(tmp_path)
+    other = tmp_path / "session.99.tmp"  # another run, mid-write
+    other.write_text('{"half": ')
+    renamed: list[str] = []
+    original = pt.Path.replace
+
+    def spy(self, target):
+        renamed.append(self.name)
+        return original(self, target)
+
+    monkeypatch.setattr(pt.os, "getpid", lambda: 4242)
+    monkeypatch.setattr(pt.Path, "replace", spy)
+    state.write("session", {"game": "Pac-Man"})
+    assert renamed == ["session.4242.tmp"]
+    assert state.read("session") == {"game": "Pac-Man"}
+    assert other.read_text() == '{"half": '  # the other run's file is untouched
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["session.99.tmp", "session.json"]
+
+
 def test_main_ignores_unhandled_events_without_touching_state(tmp_path, monkeypatch):
     monkeypatch.setattr(pt, "STATE_DIR", tmp_path / "state")
     assert pt.main(["playtracker.py", "system-selected", "snes"]) == 0
@@ -372,6 +404,128 @@ def test_bad_credentials_are_reported(conf):
         conf["MQTT_PORT"] = str(b.port)
         with pytest.raises(pt.MQTTError, match="bad username or password"):
             pt.publish(conf, [("a", "b", False)])
+    finally:
+        b.close()
+
+
+class FakeTLS:
+    """Stands in for ssl.create_default_context(): records the wrap and hands back a socket that notes its close.
+
+    The handshake itself is the ssl module's job; what playtracker owns is *when* it wraps, with which
+    server_hostname (that's what certificate checking matches against), and that the wrapped socket is closed.
+    """
+
+    def __init__(self) -> None:
+        self.wrapped: list[dict] = []
+        self.sockets: list[TLSSocket] = []
+
+    def wrap_socket(self, sock: socket.socket, server_hostname: str | None = None) -> TLSSocket:
+        self.wrapped.append({"fd": sock.fileno(), "server_hostname": server_hostname})
+        s = TLSSocket(sock)
+        self.sockets.append(s)
+        return s
+
+
+class TLSSocket:
+    """Passes everything through to the plain socket (the fake broker speaks plain MQTT), and records close()."""
+
+    def __init__(self, raw: socket.socket) -> None:
+        self.raw = raw
+        self.closed = False
+
+    def __getattr__(self, name: str):
+        return getattr(self.raw, name)
+
+    def close(self) -> None:
+        self.closed = True
+        self.raw.close()
+
+    def __enter__(self) -> TLSSocket:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+
+@pytest.fixture
+def tls(monkeypatch) -> FakeTLS:
+    fake = FakeTLS()
+    monkeypatch.setattr(pt.ssl, "create_default_context", lambda: fake)
+    return fake
+
+
+def test_mqtt_tls_yes_wraps_the_socket(conf, broker, tls):
+    conf.update(MQTT_PORT=str(broker.port), MQTT_TLS="yes", MQTT_HOST="127.0.0.1")
+    pt.publish(conf, [("a/b", "online", True)])
+    assert [w["server_hostname"] for w in tls.wrapped] == ["127.0.0.1"]
+    assert broker.published == [("a/b", "online", True)]  # MQTT went through the wrapped socket
+    assert [s.closed for s in tls.sockets] == [True]
+
+
+def test_port_8883_implies_tls(conf, tls, monkeypatch):
+    # 8883 is MQTT-over-TLS's registered port: a plain CONNECT sent there would just be dropped by the broker.
+    # The broker here listens on a random port, so the connection is redirected to it.
+    b = FakeBroker()
+    real = pt.socket.create_connection
+
+    def connect(address, timeout=None):
+        assert address == ("broker.lan", 8883)
+        return real(("127.0.0.1", b.port), timeout=timeout)
+
+    monkeypatch.setattr(pt.socket, "create_connection", connect)
+    try:
+        conf.update(MQTT_HOST="broker.lan", MQTT_PORT="8883")  # MQTT_TLS left at its default, "no"
+        assert conf["MQTT_TLS"] == "no"
+        pt.publish(conf, [("a/b", "online", True)])
+        assert [w["server_hostname"] for w in tls.wrapped] == ["broker.lan"]
+        assert b.published == [("a/b", "online", True)]
+        assert [s.closed for s in tls.sockets] == [True]
+    finally:
+        b.close()
+
+
+def test_plain_mqtt_by_default(conf, broker, tls):
+    conf["MQTT_PORT"] = str(broker.port)
+    pt.publish(conf, [("a/b", "online", True)])
+    assert tls.wrapped == [] and broker.published == [("a/b", "online", True)]
+
+
+def test_tls_socket_is_closed_when_the_broker_refuses(conf, tls):
+    b = FakeBroker(refuse=5)
+    try:
+        conf.update(MQTT_PORT=str(b.port), MQTT_TLS="on")
+        with pytest.raises(pt.MQTTError, match="not authorized"):
+            pt.publish(conf, [("a", "b", False)])
+        assert [s.closed for s in tls.sockets] == [True]
+    finally:
+        b.close()
+
+
+def test_a_failed_tls_handshake_closes_the_connection_and_queues(conf, tmp_path, monkeypatch):
+    # ssl.SSLError (bad certificate, a broker that doesn't speak TLS) is an OSError, so deliver() queues
+    # the messages like any other outage, and the plain socket it was wrapping must not leak.
+    opened: list[socket.socket] = []
+    real = pt.socket.create_connection
+
+    def connect(address, timeout=None):
+        s = real(address, timeout=timeout)
+        opened.append(s)
+        return s
+
+    class Refusing:
+        def wrap_socket(self, sock: socket.socket, server_hostname: str | None = None) -> socket.socket:
+            raise pt.ssl.SSLError("certificate verify failed")
+
+    b = FakeBroker()
+    monkeypatch.setattr(pt.socket, "create_connection", connect)
+    monkeypatch.setattr(pt.ssl, "create_default_context", Refusing)
+    try:
+        conf.update(MQTT_PORT=str(b.port), MQTT_TLS="yes")
+        logs: list[str] = []
+        pt.deliver(conf, pt.State(tmp_path), [("t/status", "online", True)], logs.append)
+        assert "certificate verify failed" in logs[-1]
+        assert pt.State(tmp_path).read("outbox")["messages"] == [["t/status", "online", True]]
+        assert [s.fileno() for s in opened] == [-1]  # closed
     finally:
         b.close()
 

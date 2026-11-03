@@ -24,13 +24,16 @@ Safety shape (the same idea as the Shield's key and app allow-lists):
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import random
 import re
-from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from typing import Annotated, Any, Literal, TypeVar
 
 from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ResourceError
 from pydantic import Field
 from typing_extensions import TypedDict
 
@@ -48,20 +51,29 @@ LAUNCH_TIMEOUT_S = 20.0
 QUIT_TIMEOUT_S = 10.0
 POLL_INTERVAL_S = 0.5
 
+
 # Hardware rate limiters:
 # 1. Rescan game lists: hammering disk / metadata reload across ROM folders
-_RELOAD_BUCKET = TokenBucket(capacity=1.0, rate=1.0 / 60.0)
 # 2. Launch / quit game: emulator process fork / kill storms (/emukill), display/audio driver lockup
-_LAUNCH_BUCKET = TokenBucket(capacity=2.0, rate=1.0 / 15.0)
 # 3. Save / load state / reset: rapid UDP 55355 state writes to flash/storage
-_STATE_BUCKET = TokenBucket(capacity=3.0, rate=1.0 / 5.0)
+def _fresh_buckets() -> tuple[TokenBucket, TokenBucket, TokenBucket]:
+    launch = TokenBucket(3, 0.2)  # 3 at once, then one every 5 s
+    reload = TokenBucket(2, 0.05)  # 2 at once, then one every 20 s
+    state = TokenBucket(3, 0.5)
+    return launch, reload, state
+
+
+_launch_bucket, _reload_bucket, _state_bucket = _fresh_buckets()
+_LAUNCH_BUCKET = _launch_bucket
+_RELOAD_BUCKET = _reload_bucket
+_STATE_BUCKET = _state_bucket
 
 
 def reset_rate_limiters() -> None:
     """Reset token buckets to full capacity (used in test fixtures)."""
-    _RELOAD_BUCKET.tokens = _RELOAD_BUCKET.capacity
-    _LAUNCH_BUCKET.tokens = _LAUNCH_BUCKET.capacity
-    _STATE_BUCKET.tokens = _STATE_BUCKET.capacity
+    _launch_bucket.tokens = _launch_bucket.capacity
+    _reload_bucket.tokens = _reload_bucket.capacity
+    _state_bucket.tokens = _state_bucket.capacity
 
 
 _es: EmulationStationClient | None = None
@@ -80,10 +92,16 @@ def ra() -> RetroArchClient:
 
 @asynccontextmanager
 async def lifespan(_server: MCPServer) -> AsyncIterator[None]:
-    global _es, _ra
+    global _es, _ra, _launch_bucket, _reload_bucket, _state_bucket, _LAUNCH_BUCKET, _RELOAD_BUCKET, _STATE_BUCKET
     settings = load_settings()
     _es = EmulationStationClient(settings)
     _ra = RetroArchClient(settings.host, settings.retroarch_port)
+    # Full buckets for each lifespan: over HTTP that's once per process (every session shares them, as they share
+    # the one cabinet); in tests, once per in-process Client, so spent tokens never leak from one test to the next.
+    _launch_bucket, _reload_bucket, _state_bucket = _fresh_buckets()
+    _LAUNCH_BUCKET = _launch_bucket
+    _RELOAD_BUCKET = _reload_bucket
+    _STATE_BUCKET = _state_bucket
     try:
         yield
     finally:
@@ -234,19 +252,32 @@ async def batocera_find_games(
     ] = None,
     system: Annotated[str | None, Field(default=None, max_length=40, description="Only this system.")] = None,
     sort: Annotated[
-        Literal["relevance", "name", "most_played", "most_time", "recently_played"],
-        Field(description="relevance (best name match first), or by play count, play time or last played."),
+        Literal["relevance", "name", "most_played", "most_time", "recently_played", "random"],
+        Field(
+            description="relevance (best name match first), by name, play count, play time or last played, "
+            "or random (a shuffled pick of the matches)."
+        ),
     ] = "relevance",
     favorites_only: bool = False,
+    genre: Annotated[
+        str | None,
+        Field(default=None, max_length=50, description="Filter by genre substring, e.g. 'Fighting', 'Platform'."),
+    ] = None,
+    players: Annotated[
+        str | None,
+        Field(default=None, max_length=10, description="Filter by player string or count, e.g. '2', '1-2'."),
+    ] = None,
     limit: Annotated[int, Field(ge=1, le=100)] = 20,
+    offset: Annotated[int, Field(ge=0, description="Skip the first N matching games for pagination.")] = 0,
 ) -> GameList:
     """
     <use_case>
-    Search the cabinet's game catalog by title, system, or play history.
+    Search the cabinet's game catalog by title, system, genre, player count, or play history.
     </use_case>
     <important_notes>
     - Returns matches with 32-character game_id needed for batocera_launch_game and batocera_get_game.
-    - Supports sorting by relevance, name, most_played, most_time, or recently_played.
+    - Supports filtering by genre and players (case-insensitive substring); use offset to page past limit.
+    - Supports sorting by relevance, name, most_played, most_time, recently_played, or random.
     </important_notes>
     """
     c = es()
@@ -254,6 +285,8 @@ async def batocera_find_games(
     query_words = _words(query) if query else []
     if query and not query_words:
         raise BatoceraError("The query has no letters or digits to match.")
+    genre_q = genre.strip().lower() if genre else None
+    players_q = players.strip().lower() if players else None
 
     # ASSUMPTION B-ES-THREADS: EmulationStation's pool has 8+ threads, so 2 at a time leaves it room for other
     # clients (its web UI, Pixelcade); hardware showed 32 systems load in about 1 s at this rate.
@@ -268,6 +301,10 @@ async def batocera_find_games(
         for raw in games.values():
             game = to_game(raw)
             if favorites_only and not game["favorite"]:
+                continue
+            if genre_q and (game["genre"] is None or genre_q not in game["genre"].lower()):
+                continue
+            if players_q and (game["players"] is None or players_q not in game["players"].lower()):
                 continue
             score = _match_score(game["name"], query_words) if query_words else 0
             if score is not None:
@@ -284,10 +321,16 @@ async def batocera_find_games(
         scored.sort(key=lambda x: x[1]["last_played"] or "", reverse=True)
     elif sort == "name":
         scored.sort(key=lambda x: x[1]["name"].lower())
+    elif sort == "random":
+        random.shuffle(scored)
     else:
         scored.sort(key=lambda x: (x[0], x[1]["name"].lower()))
     games_out = [g for _, g in scored]
-    return GameList(matches=len(games_out), games=games_out[:limit], truncated=len(games_out) > limit)
+    return GameList(
+        matches=len(games_out),
+        games=games_out[offset : offset + limit],
+        truncated=len(games_out) > (offset + limit),
+    )
 
 
 @mcp.tool(title="Get game details", annotations=READ_ONLY)
@@ -335,6 +378,17 @@ def _dry() -> bool:
     return es().settings.dry_run
 
 
+def _spend(bucket: TokenBucket, what: str) -> None:
+    """Take a token for an action about to reach the cabinet, or refuse it (taking nothing) with how long to wait.
+
+    Call it last, after validation, no-op returns and the dry-run check, so only real sends are counted.
+    """
+    wait = bucket.take()
+    if wait > 0:
+        settings = es().settings
+        raise BatoceraError(refusal(what, wait, settings.name or settings.host))
+
+
 async def _wait_for(check: Callable[[], Any], timeout: float) -> Any:
     deadline = asyncio.get_running_loop().time() + timeout
     while True:
@@ -364,10 +418,6 @@ async def batocera_launch_game(system: SystemArg, game_id: GameIdArg) -> ActionR
     raw = await c.find_game(s, gid)
     name = raw.get("name", gid)
 
-    wait = _LAUNCH_BUCKET.take(1.0)
-    if wait > 0:
-        raise BatoceraError(refusal(f"launch {name}", wait, c.settings.name or "Batocera cabinet"))
-
     running = await c.running_game()
     if running:
         if running.get("id") == gid:
@@ -383,6 +433,7 @@ async def batocera_launch_game(system: SystemArg, game_id: GameIdArg) -> ActionR
     sent = [f"POST /launch {path}"]
     if _dry():
         return _result(f"launch {name} ({s})", sent, "dry_run")
+    _spend(_launch_bucket, f"launch {name}")
     await c.launch(path)
 
     # ASSUMPTION B-ES-LAUNCH: /launch answers 200 even for a path it doesn't know, and the game starts a
@@ -415,10 +466,6 @@ async def batocera_quit_game() -> ActionResult:
     </important_notes>
     """
     c = es()
-    wait = _LAUNCH_BUCKET.take(1.0)
-    if wait > 0:
-        raise BatoceraError(refusal("quit running game", wait, c.settings.name or "Batocera cabinet"))
-
     running = await c.running_game()
     if running is None:
         return _result("No game is running.", [], "unchanged")
@@ -426,6 +473,7 @@ async def batocera_quit_game() -> ActionResult:
     sent = ["GET /emukill"]
     if _dry():
         return _result(f"quit {name}", sent, "dry_run")
+    _spend(_launch_bucket, f"quit {name}")
     await c.emukill()
 
     async def stopped() -> bool:  # ASSUMPTION B-ES-EMUKILL
@@ -498,31 +546,24 @@ async def batocera_reload_games() -> ActionResult:
     - Strictly rate-limited (1 per 60s) to prevent disk I/O thrashing and UI freezes.
     </important_notes>
     """
-    c = es()
-    wait = _RELOAD_BUCKET.take(1.0)
-    if wait > 0:
-        raise BatoceraError(refusal("rescan game lists", wait, c.settings.name or "Batocera cabinet"))
-
     sent = ["GET /reloadgames"]
     if _dry():
         return _result("rescan the game lists", sent, "dry_run")
-    await c.reload_games()
+    _spend(_reload_bucket, "rescan the game lists")
+    await es().reload_games()
     return _result("EmulationStation is reloading its game lists.", sent)
 
 
 # --- RetroArch -------------------------------------------------------------------
 # ASSUMPTION B-RA-COMMANDS: each command does what its name says; only GET_STATUS answers.
-async def _retroarch(command: str, verb: str, done: str, bucket: TokenBucket | None = _STATE_BUCKET) -> ActionResult:
-    if bucket is not None:
-        wait = bucket.take(1.0)
-        if wait > 0:
-            raise BatoceraError(refusal(verb, wait, "Batocera cabinet"))
-
+async def _retroarch(command: str, verb: str, done: str, bucket: TokenBucket | None = None) -> ActionResult:
     s = await ra().require_game()
     game = s["game"] or "the game"
     sent = [f"UDP {command}"]
     if _dry():
         return _result(f"{verb} {game}", sent, "dry_run")
+    if bucket is not None:
+        _spend(bucket, f"{verb} {game}")
     await ra().send(command)
     return _result(done.format(game=game), sent)
 
@@ -564,7 +605,9 @@ async def batocera_save_state() -> ActionResult:
     - Rate-limited to prevent UDP packet storms and file corruption.
     </important_notes>
     """
-    return await _retroarch("SAVE_STATE", "save state for", "Saved state for {game} (current slot).")
+    return await _retroarch(
+        "SAVE_STATE", "save state for", "Saved state for {game} (current slot).", bucket=_state_bucket
+    )
 
 
 @mcp.tool(title="Load state", annotations=DESTRUCTIVE)
@@ -578,7 +621,9 @@ async def batocera_load_state() -> ActionResult:
     - Rate-limited to prevent storage and UDP packet collision.
     </important_notes>
     """
-    return await _retroarch("LOAD_STATE", "load the saved state for", "Loaded the saved state for {game}.")
+    return await _retroarch(
+        "LOAD_STATE", "load the saved state for", "Loaded the saved state for {game}.", bucket=_state_bucket
+    )
 
 
 @mcp.tool(title="Take a screenshot", annotations=ACT)
@@ -608,4 +653,144 @@ async def batocera_reset_game() -> ActionResult:
     - Rate-limited to avoid hardware and display strain.
     </important_notes>
     """
-    return await _retroarch("RESET", "reset", "Reset {game}.")
+    return await _retroarch("RESET", "reset", "Reset {game}.", bucket=_state_bucket)
+
+
+# ASSUMPTION B-RA-AUDIO-SLOT: VOLUME_UP/VOLUME_DOWN step 0.5 dB, MUTE toggles, slots move by one.
+_VOLUME: dict[str, tuple[str, str, str]] = {
+    "up": ("VOLUME_UP", "turn up the volume of", "Turned up the volume of {game} one step (0.5 dB)."),
+    "down": ("VOLUME_DOWN", "turn down the volume of", "Turned down the volume of {game} one step (0.5 dB)."),
+    "mute": ("MUTE", "toggle mute for", "Toggled mute for {game} (RetroArch doesn't report which way)."),
+}
+_SLOT: dict[str, tuple[str, str, str]] = {
+    "next": ("STATE_SLOT_PLUS", "select the next save slot for", "Selected the next save slot for {game}."),
+    "previous": (
+        "STATE_SLOT_MINUS",
+        "select the previous save slot for",
+        "Selected the previous save slot for {game}.",
+    ),
+}
+
+
+@mcp.tool(title="Adjust game volume", annotations=ACT_IDEMPOTENT)
+async def batocera_adjust_volume(action: Literal["up", "down", "mute"]) -> ActionResult:
+    """
+    <use_case>
+    Adjust or mute the active RetroArch game's volume.
+    </use_case>
+    <important_notes>
+    - action='up' / 'down' steps volume by 0.5 dB; 'mute' toggles audio mute.
+    - Only affects RetroArch's internal audio output, not TV or external cabinet master amplifier.
+    </important_notes>
+    """
+    command, verb, done = _VOLUME[action]
+    return await _retroarch(command, verb, done, bucket=None)
+
+
+@mcp.tool(title="Change save state slot", annotations=ACT)
+async def batocera_change_save_slot(direction: Literal["next", "previous"]) -> ActionResult:
+    """
+    <use_case>
+    Cycle the active save-state slot for RetroArch games.
+    </use_case>
+    <important_notes>
+    - Cycles between slots 0-999 and Auto (-1).
+    - batocera_save_state and batocera_load_state operate on the active slot.
+    - Does not save or load any state data by itself.
+    </important_notes>
+    """
+    command, verb, done = _SLOT[direction]
+    return await _retroarch(command, verb, done, bucket=None)
+
+
+# --- Resources and prompts ---------------------------------------------------------
+# Resources are read-only data a client can attach as context, without a tool call. Each returns JSON text.
+# They call the same functions the tools use, so validation happens in one place. A game record only leaves
+# through to_game(), which drops the internal ROM path: the model never sees where a file lives on disk.
+@contextmanager
+def _resource_errors() -> Iterator[None]:
+    # The SDK hides any exception that isn't a ResourceError (the client gets only the URI). BatoceraError is
+    # ours and actionable, e.g. "isn't a system name" or the cabinet being unreachable, so pass its text on.
+    try:
+        yield
+    except BatoceraError as exc:
+        raise ResourceError(str(exc)) from exc
+
+
+@mcp.resource("batocera://systems", mime_type="application/json")
+async def systems_resource() -> str:
+    """Game systems with game counts, as batocera_list_systems returns them."""
+    with _resource_errors():
+        return json.dumps(await batocera_list_systems())
+
+
+@mcp.resource("batocera://status", mime_type="application/json")
+async def status_resource() -> str:
+    """Whether the cabinet is reachable and what is running, as batocera_get_status returns it."""
+    with _resource_errors():
+        return json.dumps(await batocera_get_status())
+
+
+@mcp.resource("batocera://games/{system}", mime_type="application/json")
+async def games_resource(system: str) -> str:
+    """Every game in one system, sorted by name. The system is checked the same way the tools check it."""
+    with _resource_errors():
+        s = _check(cfg.system_name, system)
+        games = [to_game(raw) for raw in (await es().games(s)).values()]
+        games.sort(key=lambda g: g["name"].lower())
+        return json.dumps(games)
+
+
+@mcp.prompt()
+async def recommend_game(genre: str, players: str = "1") -> str:
+    """Suggest three retro games on the cabinet for a genre and player count."""
+    return (
+        f"Use the batocera tools to suggest 3 retro games for the genre '{genre}' and {players} player(s).\n"
+        f"Call batocera_find_games with genre='{genre}' and players='{players}', "
+        "then pick three titles from its matches.\n"
+        "For each title, give its name, its system, and its play statistics from the results: play count, play "
+        "time, and when it was last played. Say so when a game has never been played. If there are no matches, "
+        "say so and suggest a different genre.\n"
+        "Don't launch anything. Wait for the user to pick a game, then use its id with batocera_launch_game."
+    )
+
+
+@mcp.prompt()
+async def diagnose_cabinet() -> str:
+    """Work out why the cabinet can't be reached, then walk the user through its LAN and Developer settings."""
+    return (
+        "The Batocera cabinet isn't answering. Work through these steps in order and stop at the first fix "
+        "that works.\n"
+        "1. Call batocera_get_status. If reachable is true, say the cabinet is fine and stop. "
+        "If it is false, read its error.\n"
+        "2. If you can run a shell, run `mcp-server-batocera doctor` (add --verbose for every check). It checks "
+        "each layer in order and names the HARDWARE_VALIDATION.md step for the first failure. `doctor` is a "
+        "command-line tool, not an MCP tool. If you can't run a shell, ask the user to run it and paste the output.\n"
+        "3. If the connection is refused or the API answers 403, public web access is off. Ask the user to open "
+        "Main Menu > System Settings > Developer on the cabinet, turn on 'Enable public web access', and reboot. "
+        "Then call batocera_get_status again.\n"
+        "4. If the cabinet's address has changed, ask the user to check BATOCERA_URL. Suggest a DHCP reservation "
+        "so the address stays fixed.\n"
+        "5. For the RetroArch tools only: if RetroArch doesn't answer while a game runs, its network commands are "
+        "off. Ask the user to add global.retroarch.network_cmd_enable=true to /userdata/system/batocera.conf over "
+        "SSH, then relaunch the game. Don't log in to the cabinet yourself.\n"
+        "Tell the user what you found at each step, and ask before changing anything on the cabinet."
+    )
+
+
+# Shorthand aliases for backwards compatibility and tests
+get_status = batocera_get_status
+list_systems = batocera_list_systems
+find_games = batocera_find_games
+get_game = batocera_get_game
+launch_game = batocera_launch_game
+quit_game = batocera_quit_game
+show_message = batocera_show_message
+reload_games = batocera_reload_games
+pause_game = batocera_pause_game
+save_state = batocera_save_state
+load_state = batocera_load_state
+take_screenshot = batocera_take_screenshot
+reset_game = batocera_reset_game
+adjust_volume = batocera_adjust_volume
+change_save_slot = batocera_change_save_slot

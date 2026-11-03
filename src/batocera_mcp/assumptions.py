@@ -192,6 +192,18 @@ ASSUMPTIONS: tuple[Assumption, ...] = (
         "screenshot named '<ROM>-261021-233238.png' in /userdata/screenshots, reset to the title screen, and "
         "SHOW_MSG as small text in the bottom-left corner for a few seconds (easy to miss).",
     ),
+    Assumption(
+        "B-RA-AUDIO-SLOT",
+        "VOLUME_UP and VOLUME_DOWN change RetroArch's volume by 0.5 dB; MUTE toggles mute (no command reports "
+        "whether it's muted); STATE_SLOT_PLUS and STATE_SLOT_MINUS move the save-state slot by one, going up "
+        "wraps 999 to 0 and going down stops at -1 (Auto). None of them answer, and unknown names (e.g. "
+        "VOLUME_PLUS) are ignored silently.",
+        "RetroArch 1.22.2 command.h (command names), retroarch.c CMD_EVENT_VOLUME_UP/DOWN, runloop.c "
+        "(state slot hotkeys)",
+        "medium",
+        note="Read in RetroArch 1.22.2 source 2026-10-27; not yet seen on the cabinet. Batocera could bind or "
+        "override these differently.",
+    ),
     # --- playtracker (EmulationStation event scripts) -----------------------------------------
     Assumption(
         "B-PT-SCRIPTS",

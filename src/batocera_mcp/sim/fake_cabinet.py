@@ -13,6 +13,8 @@ server depends on, each behavior tagged with the assumption it stands for
   - the API keeps answering while a game runs (B-ES-DURING-GAME)
   - game ids are md5 of the path; metadata values are strings (B-ES-GAME-ID, B-ES-METADATA)
   - RetroArch answers GET_STATUS only for libretro systems (B-RA-STATUS)
+  - VOLUME_UP/DOWN step ``ra_volume_db`` by 0.5, MUTE toggles ``ra_muted``, STATE_SLOT_PLUS/MINUS move
+    ``ra_slot`` (999 wraps to 0, down stops at -1), all without replying (B-RA-AUDIO-SLOT)
   - a fixed pool of ``http_workers`` threads (8, as on Batocera 43) serves connections, and a
     connection that sends nothing holds its worker for ``read_timeout_s`` (B-ES-THREADS)
 
@@ -155,6 +157,9 @@ class FakeCabinet:
         self.version = "43.1-sim"
         self.running: dict[str, Any] | None = None
         self.ra_state = "PLAYING"  # or "PAUSED", "CONTENTLESS"
+        self.ra_volume_db = 0.0  # RetroArch's audio_volume
+        self.ra_muted = False
+        self.ra_slot = 0  # RetroArch's state_slot; -1 is Auto
         # Faults
         self.forbidden = False  # public web access off
         self.busy = False  # scraping/updating: /isIdle false with no game
@@ -400,6 +405,15 @@ class FakeCabinet:
                     self.ra_state = "PAUSED" if self.ra_state == "PLAYING" else "PLAYING"
                 elif cmd == "RESET":
                     self.ra_state = "PLAYING"
+                # ASSUMPTION B-RA-AUDIO-SLOT
+                elif cmd in ("VOLUME_UP", "VOLUME_DOWN"):
+                    self.ra_volume_db += 0.5 if cmd == "VOLUME_UP" else -0.5
+                elif cmd == "MUTE":
+                    self.ra_muted = not self.ra_muted
+                elif cmd == "STATE_SLOT_PLUS":
+                    self.ra_slot = 0 if self.ra_slot >= 999 else self.ra_slot + 1
+                elif cmd == "STATE_SLOT_MINUS":
+                    self.ra_slot = max(-1, self.ra_slot - 1)
                 if cmd == "GET_STATUS" and game is not None:
                     rom = game["path"].rsplit("/", 1)[-1].rsplit(".", 1)[0]
                     reply = f"GET_STATUS {self.ra_state} {game['systemName']},{rom},crc32=1a2b3c4d"

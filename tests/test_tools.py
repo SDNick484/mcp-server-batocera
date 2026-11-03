@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import json
+import re
 
 import pytest
 from mcp import Client
 
 from batocera_mcp import server
+from batocera_mcp.client import Game
 from batocera_mcp.config import Settings
 
 pytestmark = pytest.mark.anyio
@@ -31,6 +34,8 @@ ALL_TOOLS = {
     "batocera_load_state",
     "batocera_take_screenshot",
     "batocera_reset_game",
+    "batocera_adjust_volume",
+    "batocera_change_save_slot",
 }
 ACTIONS = {
     "batocera_launch_game",
@@ -42,6 +47,8 @@ ACTIONS = {
     "batocera_load_state",
     "batocera_take_screenshot",
     "batocera_reset_game",
+    "batocera_adjust_volume",
+    "batocera_change_save_slot",
 }
 
 
@@ -68,7 +75,8 @@ def text(result) -> str:
 
 
 async def call(c: Client, tool: str, **args):
-    return await c.call_tool(tool, args)
+    name = tool if tool.startswith("batocera_") else f"batocera_{tool}"
+    return await c.call_tool(name, args)
 
 
 async def act(c: Client, tool: str, **args) -> dict:
@@ -217,6 +225,133 @@ async def test_recently_played_and_favorites(mcp_client):
     assert [g["name"] for g in r["games"]] == ["Super Mario World"]
 
 
+ALL_NAMES = [
+    "Galaga",
+    "Pac-Man (Midway)",
+    "Street Fighter II Turbo",
+    "Super Mario World",
+    "Super Metroid",
+    "Super Smash Bros. Melee",
+]
+
+
+async def test_find_games_schema_has_paging_and_filters(mcp_client):
+    props = (await tools(mcp_client))["batocera_find_games"].input_schema["properties"]
+    assert props["offset"]["minimum"] == 0 and props["offset"]["default"] == 0
+    assert props["genre"]["anyOf"][0]["maxLength"] == 50
+    assert props["players"]["anyOf"][0]["maxLength"] == 10
+    assert "random" in props["sort"]["enum"]
+
+
+@pytest.mark.parametrize(
+    ("offset", "limit", "names", "truncated"),
+    [
+        (0, 2, ALL_NAMES[0:2], True),
+        (2, 2, ALL_NAMES[2:4], True),
+        (4, 2, ALL_NAMES[4:6], False),  # exactly reaches the end
+        (5, 10, ALL_NAMES[5:], False),
+        (6, 2, [], False),  # past the end: empty page, matches still counted
+        (50, 5, [], False),
+    ],
+)
+async def test_find_games_offset_pages(mcp_client, offset, limit, names, truncated):
+    r = (await call(mcp_client, "find_games", sort="name", offset=offset, limit=limit)).structured_content
+    assert [g["name"] for g in r["games"]] == names
+    assert r["matches"] == 6
+    assert r["truncated"] is truncated
+
+
+async def test_find_games_pages_cover_every_match_once(mcp_client):
+    seen = []
+    for offset in range(0, 6, 4):
+        r = (await call(mcp_client, "find_games", sort="name", offset=offset, limit=4)).structured_content
+        seen += [g["name"] for g in r["games"]]
+    assert seen == ALL_NAMES
+
+
+async def test_find_games_negative_offset_is_rejected(mcp_client):
+    r = await call(mcp_client, "find_games", offset=-1)
+    assert r.is_error
+
+
+@pytest.mark.parametrize(
+    ("genre", "names"),
+    [
+        ("Fighting", ["Street Fighter II Turbo"]),
+        ("fight", ["Street Fighter II Turbo"]),  # substring, case-insensitive
+        ("PLATFORM", ["Super Mario World"]),
+        ("a", ["Super Metroid", "Super Mario World"]),  # Action, Platform; games with no genre skipped
+        ("Puzzle", []),
+    ],
+)
+async def test_find_games_by_genre(mcp_client, genre, names):
+    r = (await call(mcp_client, "find_games", genre=genre, sort="name")).structured_content
+    assert sorted(g["name"] for g in r["games"]) == sorted(names)
+    assert all(g["genre"] is not None for g in r["games"])
+    assert r["matches"] == len(names)
+
+
+@pytest.mark.parametrize(
+    ("players", "names"),
+    [
+        ("1-2", ["Galaga", "Pac-Man (Midway)", "Street Fighter II Turbo", "Super Mario World"]),
+        ("2", ["Galaga", "Pac-Man (Midway)", "Street Fighter II Turbo", "Super Mario World"]),
+        ("4", ["Super Smash Bros. Melee"]),
+        ("1", ["Galaga", "Pac-Man (Midway)", "Street Fighter II Turbo", "Super Mario World",
+               "Super Smash Bros. Melee"]),  # Super Metroid has no players field, so never matches
+        ("8", []),
+    ],
+)  # fmt: skip
+async def test_find_games_by_players(mcp_client, players, names):
+    r = (await call(mcp_client, "find_games", players=players, sort="name")).structured_content
+    assert [g["name"] for g in r["games"]] == names
+    assert r["matches"] == len(names)
+
+
+async def test_find_games_filters_combine(mcp_client):
+    r = (await call(mcp_client, "find_games", genre="fighting", players="2", system="snes")).structured_content
+    assert [g["name"] for g in r["games"]] == ["Street Fighter II Turbo"]
+    r = (await call(mcp_client, "find_games", query="super", players="1-2")).structured_content
+    assert [g["name"] for g in r["games"]] == ["Super Mario World"]
+    r = (await call(mcp_client, "find_games", genre="platform", system="mame")).structured_content
+    assert r["games"] == [] and r["matches"] == 0
+
+
+@pytest.mark.parametrize(("arg", "value"), [("genre", "x" * 51), ("players", "1" * 11)])
+async def test_find_games_filter_length_limits(mcp_client, arg, value):
+    r = await call(mcp_client, "find_games", **{arg: value})
+    assert r.is_error
+
+
+async def test_find_games_random_returns_every_match(mcp_client):
+    r = (await call(mcp_client, "find_games", sort="random")).structured_content
+    assert sorted(g["name"] for g in r["games"]) == ALL_NAMES
+    assert (r["matches"], r["truncated"]) == (6, False)
+
+
+async def test_find_games_random_shuffles_before_slicing(mcp_client, monkeypatch):
+    calls = []
+
+    def fake_shuffle(seq):
+        calls.append(len(seq))
+        seq.reverse()
+
+    monkeypatch.setattr(server.random, "shuffle", fake_shuffle)
+    r = (await call(mcp_client, "find_games", sort="random", limit=2, offset=1)).structured_content
+    # The whole match list is shuffled (here: reversed) and only then paged.
+    assert calls == [6]
+    assert len(r["games"]) == 2
+    assert (r["matches"], r["truncated"]) == (6, True)
+
+
+async def test_find_games_random_varies(mcp_client):
+    orders = set()
+    for _ in range(20):
+        r = (await call(mcp_client, "find_games", sort="random")).structured_content
+        orders.add(tuple(g["name"] for g in r["games"]))
+    assert len(orders) > 1  # 6! orders; 20 identical draws has odds of about 1e-54
+
+
 async def test_game_list_is_cached(mcp_client, cabinet):
     await call(mcp_client, "batocera_find_games", query="mario", system="snes")
     await call(mcp_client, "batocera_find_games", query="metroid", system="snes")
@@ -363,6 +498,90 @@ async def test_state_screenshot_reset(mcp_client, cabinet):
     assert await ra_received(cabinet, 4) == ["SAVE_STATE", "LOAD_STATE", "SCREENSHOT", "RESET"]
 
 
+@pytest.mark.parametrize(
+    ("args", "expected"),
+    [
+        ({"action": "up"}, "VOLUME_UP"),
+        ({"action": "down"}, "VOLUME_DOWN"),
+        ({"action": "mute"}, "MUTE"),
+    ],
+)
+async def test_adjust_volume_sends_retroarch_command(mcp_client, cabinet, args, expected):
+    # ASSUMPTION B-RA-AUDIO-SLOT: RetroArch's names; VOLUME_PLUS/MINUS would be ignored silently.
+    cabinet.play("snes")
+    r = await act(mcp_client, "adjust_volume", **args)
+    assert r["outcome"] == "done" and r["sent"] == [f"UDP {expected}"]
+    assert "Super Mario World (USA)" in r["detail"]
+    assert await ra_received(cabinet, 1) == [expected]
+    assert cabinet.ra_received == ["GET_STATUS", expected]  # checked a game runs, then sent the command
+
+
+async def test_adjust_volume_changes_the_simulated_volume(mcp_client, cabinet):
+    cabinet.play("snes")
+    for action in ("up", "up", "down", "mute"):
+        await act(mcp_client, "adjust_volume", action=action)
+    assert await ra_received(cabinet, 4) == ["VOLUME_UP", "VOLUME_UP", "VOLUME_DOWN", "MUTE"]
+    assert (cabinet.ra_volume_db, cabinet.ra_muted) == (0.5, True)
+    await act(mcp_client, "adjust_volume", action="mute")  # a toggle: the second one unmutes
+    await ra_received(cabinet, 5)
+    assert cabinet.ra_muted is False
+
+
+@pytest.mark.parametrize(("direction", "expected"), [("next", "STATE_SLOT_PLUS"), ("previous", "STATE_SLOT_MINUS")])
+async def test_change_save_slot_sends_retroarch_command(mcp_client, cabinet, direction, expected):
+    # ASSUMPTION B-RA-AUDIO-SLOT
+    cabinet.play("snes")
+    r = await act(mcp_client, "change_save_slot", direction=direction)
+    assert r["outcome"] == "done" and r["sent"] == [f"UDP {expected}"]
+    assert await ra_received(cabinet, 1) == [expected]
+    assert cabinet.ra_received == ["GET_STATUS", expected]
+
+
+async def test_save_slot_moves_and_save_state_follows(mcp_client, cabinet):
+    cabinet.play("snes")
+    await act(mcp_client, "change_save_slot", direction="next")
+    await act(mcp_client, "change_save_slot", direction="next")
+    await act(mcp_client, "save_state")
+    assert await ra_received(cabinet, 3) == ["STATE_SLOT_PLUS", "STATE_SLOT_PLUS", "SAVE_STATE"]
+    assert cabinet.ra_slot == 2
+    for _ in range(4):  # down past 0 stops at Auto (-1)
+        await act(mcp_client, "change_save_slot", direction="previous")
+    await ra_received(cabinet, 7)
+    assert cabinet.ra_slot == -1
+
+
+@pytest.mark.parametrize(
+    ("tool", "args"),
+    [("adjust_volume", {"action": "up"}), ("adjust_volume", {"action": "mute"}),
+     ("change_save_slot", {"direction": "next"})],
+)  # fmt: skip
+async def test_audio_and_slot_tools_need_a_game(mcp_client, cabinet, tool, args):
+    # Nothing running at all: RetroArch isn't there to answer GET_STATUS.
+    r = await call(mcp_client, tool, **args)
+    assert r.is_error and "isn't answering" in text(r)
+    # RetroArch open with no content.
+    cabinet.play("snes")
+    cabinet.ra_state = "CONTENTLESS"
+    r = await call(mcp_client, tool, **args)
+    assert r.is_error and "no game loaded" in text(r)
+    # A standalone emulator (Dolphin) doesn't take network commands either.
+    cabinet.play("gamecube")
+    r = await call(mcp_client, tool, **args)
+    assert r.is_error and "standalone emulators" in text(r)
+    assert cabinet.ra_commands == []
+
+
+async def test_audio_and_slot_tools_reject_other_values(mcp_client, cabinet):
+    cabinet.play("snes")
+    t = await tools(mcp_client)
+    assert t["batocera_adjust_volume"].input_schema["properties"]["action"]["enum"] == ["up", "down", "mute"]
+    assert t["batocera_change_save_slot"].input_schema["properties"]["direction"]["enum"] == ["next", "previous"]
+    for tool, args in (("adjust_volume", {"action": "VOLUME_PLUS"}), ("change_save_slot", {"direction": "QUIT"})):
+        r = await call(mcp_client, tool, **args)
+        assert r.is_error, tool
+    assert cabinet.ra_commands == []
+
+
 async def test_retroarch_not_answering_explains_how_to_enable(mcp_client, cabinet):
     # ASSUMPTION B-RA-ENABLE
     cabinet.play("snes")
@@ -381,21 +600,23 @@ async def test_retroarch_without_a_game(mcp_client, cabinet):
 
 # --- Rate Limiting -----------------------------------------------------------------------
 async def test_reload_games_rate_limit(mcp_client):
-    r1 = await act(mcp_client, "batocera_reload_games")
-    assert r1["outcome"] == "done"
+    assert (await act(mcp_client, "batocera_reload_games"))["outcome"] == "done"
+    assert (await act(mcp_client, "batocera_reload_games"))["outcome"] == "done"
     r2 = await call(mcp_client, "batocera_reload_games")
-    assert r2.is_error and "Rate limit on Test cabinet: refusing to rescan game lists" in text(r2)
+    assert r2.is_error and "refusing to rescan the game lists" in text(r2)
 
 
 async def test_launch_game_rate_limit(mcp_client, cabinet):
     smw = cabinet.game("snes")
-    # Take initial 2 tokens
+    # Take initial 3 tokens
     assert (await act(mcp_client, "batocera_launch_game", system="snes", game_id=smw["id"]))["outcome"] == "done"
     cabinet.play("mame")
     assert (await act(mcp_client, "batocera_quit_game"))["outcome"] == "done"
-    # Third rapid call should be rate-limited
-    r3 = await call(mcp_client, "batocera_launch_game", system="snes", game_id=smw["id"])
-    assert r3.is_error and "Rate limit on Test cabinet: refusing to launch" in text(r3)
+    assert (await act(mcp_client, "batocera_launch_game", system="snes", game_id=smw["id"]))["outcome"] == "done"
+    # Fourth rapid call should be rate-limited
+    cabinet.play("mame")
+    r4 = await call(mcp_client, "batocera_quit_game")
+    assert r4.is_error and "refusing to quit" in text(r4)
 
 
 async def test_save_state_rate_limit(mcp_client, cabinet):
@@ -403,7 +624,7 @@ async def test_save_state_rate_limit(mcp_client, cabinet):
     for _ in range(3):
         assert (await act(mcp_client, "batocera_save_state"))["outcome"] == "done"
     r4 = await call(mcp_client, "batocera_save_state")
-    assert r4.is_error and "Rate limit on Batocera cabinet: refusing to save state" in text(r4)
+    assert r4.is_error and "refusing to save state" in text(r4)
 
 
 # --- Dry run ----------------------------------------------------------------------------
@@ -428,10 +649,121 @@ async def test_dry_run_reads_but_sends_nothing(dry_client, cabinet):
     for tool in actions:
         assert (await act(dry_client, tool))["outcome"] == "dry_run", tool
     assert (await act(dry_client, "batocera_pause_game", paused=True))["outcome"] == "dry_run"
+    for action in ("up", "down", "mute"):
+        r = await act(dry_client, "batocera_adjust_volume", action=action)
+        assert r["outcome"] == "dry_run" and r["detail"].startswith("DRY RUN, nothing sent: would "), action
+    for direction, cmd in (("next", "STATE_SLOT_PLUS"), ("previous", "STATE_SLOT_MINUS")):
+        r = await act(dry_client, "batocera_change_save_slot", direction=direction)
+        assert (r["outcome"], r["sent"]) == ("dry_run", [f"UDP {cmd}"])
     changing = [
         r for r in cabinet.requests if r[1] in ("/launch", "/emukill", "/notify", "/messagebox", "/reloadgames")
     ]
     assert changing == [] and cabinet.ra_commands == [] and cabinet.running["id"] == smw["id"]
+    assert (cabinet.ra_volume_db, cabinet.ra_muted, cabinet.ra_slot) == (0.0, False, 0)
+
+
+async def test_dry_run_audio_and_slot_still_need_a_game(dry_client, cabinet):
+    # Dry run still reads (GET_STATUS), so it reports the same error a real call would.
+    r = await call(dry_client, "adjust_volume", action="up")
+    assert r.is_error and "isn't answering" in text(r)
+    r = await call(dry_client, "change_save_slot", direction="next")
+    assert r.is_error and "isn't answering" in text(r)
+    assert cabinet.ra_commands == []
+
+
+# --- Rate limits --------------------------------------------------------------------------
+# launch_game and quit_game share a bucket of 3 (one back every 5 s); reload_games has its own of 2 (one back every
+# 20 s). Each test runs in well under 5 s, so no token comes back mid-test.
+def rate_limited(r, what: str) -> bool:
+    """Whether r is ratelimit.refusal()'s message for `what` (the SDK puts "Error executing tool ...: " before it)."""
+    return r.is_error and bool(
+        re.search(
+            rf"Rate limit on Test cabinet: refusing to {re.escape(what)} \(try again in \d+s\)\. "
+            r"This guards against runaway loops; if this is deliberate, wait and retry\.$",
+            text(r),
+        )
+    )
+
+
+async def test_launch_burst_is_refused(mcp_client, cabinet):
+    smw = cabinet.game("snes")
+    for _ in range(3):
+        cabinet.running = None  # the game ends on its own, so each launch is a real one
+        assert (await act(mcp_client, "launch_game", system="snes", game_id=smw["id"]))["outcome"] == "done"
+    cabinet.running = None
+    r = await call(mcp_client, "launch_game", system="snes", game_id=smw["id"])
+    assert rate_limited(r, "launch Super Mario World"), text(r)
+    assert len(cabinet.calls("/launch")) == 3 and cabinet.running is None
+
+
+async def test_quit_burst_is_refused(mcp_client, cabinet):
+    for _ in range(3):
+        cabinet.play("mame")
+        assert (await act(mcp_client, "quit_game"))["outcome"] == "done"
+    cabinet.play("mame")
+    r = await call(mcp_client, "quit_game")
+    assert rate_limited(r, "quit Pac-Man (Midway)"), text(r)
+    assert len(cabinet.calls("/emukill")) == 3 and cabinet.running is not None  # still playing
+
+
+async def test_launch_and_quit_share_a_bucket(mcp_client, cabinet):
+    # A launch/quit loop is the runaway this guards against; separate buckets would let it run twice as fast.
+    smw = cabinet.game("snes")
+    await act(mcp_client, "launch_game", system="snes", game_id=smw["id"])
+    await act(mcp_client, "quit_game")
+    await act(mcp_client, "launch_game", system="snes", game_id=smw["id"])
+    r = await call(mcp_client, "quit_game")
+    assert rate_limited(r, "quit Super Mario World"), text(r)
+    assert cabinet.running["id"] == smw["id"]
+
+
+async def test_reload_burst_is_refused(mcp_client, cabinet):
+    for _ in range(2):
+        assert (await act(mcp_client, "reload_games"))["outcome"] == "done"
+    r = await call(mcp_client, "reload_games")
+    assert rate_limited(r, "rescan the game lists"), text(r)
+    assert cabinet.reloads == 2
+    # Its own bucket: the launch/quit budget is untouched.
+    assert server._launch_bucket.tokens == 3
+
+
+async def test_dry_runs_spend_no_tokens(dry_client, cabinet):
+    smw = cabinet.game("snes")
+    for _ in range(5):
+        assert (await act(dry_client, "launch_game", system="snes", game_id=smw["id"]))["outcome"] == "dry_run"
+        assert (await act(dry_client, "reload_games"))["outcome"] == "dry_run"
+    cabinet.play("snes")
+    for _ in range(5):
+        assert (await act(dry_client, "quit_game"))["outcome"] == "dry_run"
+    assert (server._launch_bucket.tokens, server._reload_bucket.tokens) == (3, 2)
+
+
+async def test_no_ops_and_refusals_spend_no_tokens(mcp_client, cabinet):
+    smw = cabinet.game("snes")
+    for _ in range(5):
+        assert (await act(mcp_client, "quit_game"))["outcome"] == "unchanged"  # nothing running
+        assert (await call(mcp_client, "launch_game", system="snes", game_id="0" * 32)).is_error  # unknown id
+    cabinet.play("snes")
+    for _ in range(5):
+        r = await act(mcp_client, "launch_game", system="snes", game_id=smw["id"])
+        assert r["outcome"] == "unchanged"  # already running
+    cabinet.play("mame")
+    for _ in range(5):
+        r = await call(mcp_client, "launch_game", system="snes", game_id=smw["id"])
+        assert r.is_error and "is running" in text(r)  # refused before the bucket
+    assert server._launch_bucket.tokens == 3
+    assert (await act(mcp_client, "quit_game"))["outcome"] == "done"  # the full budget is still there
+
+
+async def test_each_session_starts_with_full_buckets(settings, monkeypatch, cabinet):
+    # lifespan() rebuilds the buckets, so one session's spent tokens never carry into the next.
+    monkeypatch.setattr(server, "load_settings", lambda: settings)
+    for _ in range(2):
+        async with Client(server.mcp) as c:
+            for _ in range(2):
+                assert (await act(c, "reload_games"))["outcome"] == "done"
+            assert rate_limited(await call(c, "reload_games"), "rescan the game lists")
+    assert cabinet.reloads == 4
 
 
 # --- Faults -------------------------------------------------------------------------------
@@ -456,3 +788,78 @@ async def test_unreachable_cabinet(settings, monkeypatch):
         assert s["reachable"] is False and "public web access" in s["error"]
         r = await c.call_tool("batocera_quit_game", {})
         assert r.is_error
+
+
+# --- Resources and prompts -------------------------------------------------------------
+
+
+async def test_static_resources_are_listed(mcp_client):
+    uris = {str(r.uri) for r in (await mcp_client.list_resources()).resources}
+    assert {"batocera://systems", "batocera://status"} <= uris
+
+
+async def test_games_resource_is_a_template(mcp_client):
+    templates = {t.uri_template for t in (await mcp_client.list_resource_templates()).resource_templates}
+    assert "batocera://games/{system}" in templates
+
+
+async def test_systems_resource_matches_the_list_systems_tool(mcp_client):
+    data = json.loads((await mcp_client.read_resource("batocera://systems")).contents[0].text)
+    tool = (await call(mcp_client, "list_systems")).structured_content
+    assert data == tool
+
+
+async def test_status_resource_reports_the_cabinet(mcp_client):
+    data = json.loads((await mcp_client.read_resource("batocera://status")).contents[0].text)
+    assert data["reachable"] is True
+    assert data["dry_run"] is False
+
+
+async def test_games_resource_lists_one_system_sorted_without_rom_paths(mcp_client, cabinet):
+    text = (await mcp_client.read_resource("batocera://games/snes")).contents[0].text
+    games = json.loads(text)
+    assert len(games) == len(cabinet.library["snes"])
+    names = [g["name"].lower() for g in games]
+    assert names == sorted(names)
+    # Only the sanitized Game fields come out, and no raw ROM path appears anywhere in the payload.
+    assert all(set(g) <= set(Game.__annotations__) for g in games)
+    assert "path" not in text
+    for raw in cabinet.library["snes"]:
+        assert raw["path"] not in text
+
+
+async def test_games_resource_refuses_a_bad_system_name(mcp_client):
+    with pytest.raises(Exception, match="isn't a system name"):
+        await mcp_client.read_resource("batocera://games/snes!")
+
+
+async def test_games_resource_refuses_a_non_game_system(mcp_client):
+    with pytest.raises(Exception, match="not a game system"):
+        await mcp_client.read_resource("batocera://games/imageviewer")
+
+
+async def test_prompts_are_listed(mcp_client):
+    names = {p.name for p in (await mcp_client.list_prompts()).prompts}
+    assert {"recommend_game", "diagnose_cabinet"} <= names
+
+
+async def test_recommend_game_prompt_fills_in_genre_and_players(mcp_client):
+    result = await mcp_client.get_prompt("recommend_game", {"genre": "Fighting", "players": "2"})
+    body = result.messages[0].content.text
+    assert "find_games" in body
+    assert "genre='Fighting'" in body and "players='2'" in body
+    assert "3 retro games" in body
+
+
+async def test_recommend_game_prompt_defaults_to_one_player(mcp_client):
+    result = await mcp_client.get_prompt("recommend_game", {"genre": "Platform"})
+    assert "players='1'" in result.messages[0].content.text
+
+
+async def test_diagnose_cabinet_prompt_points_at_doctor_and_settings(mcp_client):
+    result = await mcp_client.get_prompt("diagnose_cabinet", {})
+    body = result.messages[0].content.text
+    assert "get_status" in body
+    assert "mcp-server-batocera doctor" in body
+    assert "Enable public web access" in body
+    assert "batocera.conf" in body
