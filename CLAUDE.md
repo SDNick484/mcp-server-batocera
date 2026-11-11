@@ -94,6 +94,13 @@ From batocera-emulationstation (`es-app/src/services/HttpServerThread.cpp`, `Htt
 - Batocera's build selects the Mosquitto package (`batocera-system/Config.in`); playtracker doesn't rely on
   it and speaks MQTT itself, so it works either way.
 
+## Releases
+
+Version lives only in `src/batocera_mcp/__init__.py` (`pyproject.toml` reads it). Bump it and add a
+CHANGELOG.md section for every release: pip treats a same-version install as already satisfied. Pushing
+tag `vX.Y.Z` runs `.github/workflows/release.yml` (PyPI trusted publishing, then a GitHub release).
+CONTRIBUTING.md has the steps and the one-time PyPI setup.
+
 ## Commands
 
 ```sh

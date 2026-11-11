@@ -1,20 +1,26 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]  # 77: SPDX `license` strings (PEP 639)
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "mcp-server-batocera"
-version = "0.1.0"
+dynamic = ["version"]  # from batocera_mcp.__version__ (below)
 description = "MCP server for Batocera retro-gaming cabinets, via the EmulationStation web API and RetroArch network commands"
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Nicholas E. Andrade" }]
 requires-python = ">=3.11"
 keywords = ["mcp", "mcp-server", "batocera", "emulationstation", "retroarch", "arcade", "home-assistant"]
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
-    "License :: OSI Approved :: MIT License",
+    "Framework :: AsyncIO",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Games/Entertainment :: Arcade",
 ]
 dependencies = [
@@ -28,12 +34,16 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/SDNick484/mcp-server-batocera"
 Issues = "https://github.com/SDNick484/mcp-server-batocera/issues"
+Changelog = "https://github.com/SDNick484/mcp-server-batocera/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "anyio>=4", "ruff>=0.6", "mypy>=1.11"]
 
 [project.scripts]
 mcp-server-batocera = "batocera_mcp.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "batocera_mcp.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
