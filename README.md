@@ -14,7 +14,7 @@ off) for automations. It doesn't log screensaver activity.
 > On a real cabinet (Batocera 43), every MCP tool has been checked: `doctor`, the library, launching and
 > quitting, messages, RetroArch and dry run, and playtracker with Home Assistant (sessions, the short-session
 > filter, broker outages, and ignoring the screensaver). playtracker's cabinet events (Screensaver, Activity,
-> session start, Cabinet) aren't checked on hardware yet. See [HARDWARE_VALIDATION.md](HARDWARE_VALIDATION.md) and the
+> session start, Cabinet) aren't checked on hardware yet. See [HARDWARE_VALIDATION.md](https://github.com/SDNick484/mcp-server-batocera/blob/main/HARDWARE_VALIDATION.md) and the
 > [verification table](#verification-status).
 
 This is not an official Batocera project.
@@ -74,16 +74,22 @@ them off the internet.
 ## Install the MCP server
 
 ```sh
-git clone https://github.com/SDNick484/mcp-server-batocera.git
-cd mcp-server-batocera
-python -m venv .venv && . .venv/bin/activate
-pip install -e .
+python -m venv ~/.venvs/batocera && . ~/.venvs/batocera/bin/activate
+pip install mcp-server-batocera
 BATOCERA_URL=192.168.1.20 mcp-server-batocera doctor
+```
+
+From source instead (for the newest code, or to run the tests):
+
+```sh
+git clone https://github.com/SDNick484/mcp-server-batocera.git && cd mcp-server-batocera
+python -m venv .venv && . .venv/bin/activate
+pip install -e ".[dev]" && pytest
 ```
 
 `doctor` checks each layer between this machine and the cabinet (TCP, the API, the library, the
 running game, RetroArch), and when one fails, says what it means and which
-[HARDWARE_VALIDATION.md](HARDWARE_VALIDATION.md) step covers it. It changes nothing. It ends with the
+[HARDWARE_VALIDATION.md](https://github.com/SDNick484/mcp-server-batocera/blob/main/HARDWARE_VALIDATION.md) step covers it. It changes nothing. It ends with the
 [assumptions](#verification-status) that hardware contradicted (listed; the code no longer relies on them) and a
 count of those not yet confirmed; `doctor --verbose` lists those too, and `doctor --json` always includes
 both lists.
@@ -263,7 +269,8 @@ Two filters on top of that:
 
 1. In Home Assistant, create a user for the cabinet (*Settings > People > Users*, e.g. `batocera`). The
    Mosquitto add-on accepts Home Assistant users.
-2. Copy the files to the cabinet:
+2. Copy the files to the cabinet, from a clone of this repository (the PyPI package is the MCP server
+   only; playtracker runs on the cabinet and isn't part of it):
    ```sh
    scp playtracker/playtracker.py root@192.168.1.20:/userdata/system/configs/emulationstation/scripts/
    scp playtracker/playtracker.conf.example root@192.168.1.20:/userdata/system/configs/playtracker.conf
@@ -332,7 +339,7 @@ shutdown event would arrive at the next boot. `/tmp` is a tmpfs, emptied by any 
 
 Every Batocera behavior the code relies on is listed in `src/batocera_mcp/assumptions.py`, with its
 source and how sure we are; the code cites each id where it depends on it, and
-[HARDWARE_VALIDATION.md](HARDWARE_VALIDATION.md) has the step that confirms it. *high* means read
+[HARDWARE_VALIDATION.md](https://github.com/SDNick484/mcp-server-batocera/blob/main/HARDWARE_VALIDATION.md) has the step that confirms it. *high* means read
 directly in the code that implements it; *medium* means read in source but dependent on settings,
 timing or versions; *low* means our own guess. Hardware results are from Batocera 43 (2026-10-21 to 2026-10-24); every assumption except `B-PT-LIFECYCLE` and `B-RA-AUDIO-SLOT` is confirmed.
 
@@ -378,4 +385,4 @@ mypy                # strict, src/ and playtracker/
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](https://github.com/SDNick484/mcp-server-batocera/blob/main/LICENSE).
