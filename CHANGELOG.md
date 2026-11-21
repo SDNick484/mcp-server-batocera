@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- Every tool now has an authorization tier (`read`, `power-off`, `everyday` or `costly`), from the shared `remote.py`. The costly tools, `batocera_quit_game`, `batocera_load_state` and `batocera_reset_game`, ask the person to confirm before they run, and refuse where the app can't show the prompt or the answer isn't an explicit yes. `mcp-server-batocera call` asks on the terminal.
+- `MCP_ALLOWED_SERVICE_TOKENS` and `MCP_AUTOMATION_TIERS` settings (README, `deploy/alpine/env.example`).
+
+### Changed
+
+- A Cloudflare Access service token now gets 403 unless its client ID is in `MCP_ALLOWED_SERVICE_TOKENS`, and an automated caller may use only the tiers in `MCP_AUTOMATION_TIERS` (default `read,power-off`; never `costly`). Deployments that use a service token must set the variable.
+
 ## [0.1.0]
 
 First release on PyPI.

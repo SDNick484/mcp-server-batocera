@@ -57,6 +57,11 @@ reasoning behind non-obvious changes instead of only making them.
 - playtracker must stay stdlib-only, single-file, and must never raise into EmulationStation (exit 0).
 - Raise `BatoceraError` (a `ToolError`) for anything the model or user can act on. Log to stderr only.
 - Every tool has a `title`, explicit `ToolAnnotations`, and constrained args. `test_tools.py` enforces this.
+- **Every tool has a `@tier(...)`** (`remote.py`), directly under `@mcp.tool`: `read`, `everyday` or `costly`
+  (no tool here turns anything off or on, so none is `power-off`). `costly` = loses unsaved progress
+  (`quit_game`, `load_state`, `reset_game`) and needs a `confirm=` sentence saying what is lost; a new tool
+  with no tier fails `test_authorization.py`. A tiered tool can't be called directly from Python (use
+  `fn.__wrapped__`, or the in-process `Client` with an `elicitation_callback` that says yes).
 - **Actions honor dry run** (`if _dry(): return _result(..., "dry_run")` before anything is sent) and return
   an `ActionResult` (`cabinet`, `outcome` done/unchanged/dry_run, `detail`, `sent`, `warnings`).
 - **Don't invent Batocera behavior.** Anything not seen on hardware goes in `assumptions.py` (status

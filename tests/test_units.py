@@ -187,7 +187,7 @@ async def test_find_games_loads_two_systems_at_a_time(monkeypatch):
     c = slow_client(es)
     monkeypatch.setattr(server, "_es", c)
     try:
-        r = await server.find_games(query="game", sort="name")
+        r = await server.find_games.__wrapped__(query="game", sort="name")
     finally:
         await c.aclose()
     assert r["matches"] == 5

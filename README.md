@@ -179,6 +179,8 @@ exits) as `mcp-batocera`, logging to `/var/log/mcp-server-batocera/server.log`. 
 | `--public-host` | `MCP_PUBLIC_HOSTS` | none: only loopback Host headers pass |
 | | `CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD` | none: serves only this machine |
 | | `MCP_ALLOWED_EMAILS` | anyone Access lets in |
+| | `MCP_ALLOWED_SERVICE_TOKENS` | none: no Access service token gets in (see [What each caller may do](#what-each-caller-may-do)) |
+| | `MCP_AUTOMATION_TIERS` | `read,power-off`: what an admitted service token may call |
 
 To use it as a connector, with cloudflared running on the same machine (keep the `127.0.0.1` bind):
 
@@ -214,6 +216,27 @@ All tools are prefixed with `batocera_` to eliminate namespace collisions when m
 | `batocera_adjust_volume`      | Volume up or down one step (0.5 dB), or toggle mute (RetroArch)                               |
 | `batocera_change_save_slot`   | Next or previous save-state slot, used by `save_state` / `load_state` (RetroArch)              |
 
+### What each caller may do, and the costly tools
+
+Every tool has an authorization tier (`read`, `power-off`, `everyday` or `costly`; the tier is declared in
+`server.py` with `@tier`, from `remote.py`). People may use all of them. An automated caller, an Access
+service token, may use only the tiers in `MCP_AUTOMATION_TIERS` (default `read,power-off`; never `costly`)
+and only if its client ID is in `MCP_ALLOWED_SERVICE_TOKENS`. The full rules are in
+[mcp-server-shared](https://github.com/SDNick484/mcp-server-shared#what-each-caller-may-do).
+
+Three tools are **costly**: they lose unsaved progress, so each asks the person to confirm in a prompt the
+model can't answer, then runs once:
+
+- `batocera_quit_game`: "Quit the running game? Anything not saved in it is lost."
+- `batocera_load_state`: "Load the saved state? Progress since the last save in the current slot is lost."
+- `batocera_reset_game`: "Reset the running game? It restarts from the beginning and anything not saved is lost."
+
+If the app can't show the prompt, or the answer is anything but an explicit yes, the call is refused and
+nothing happens. In practice that means these three work from Claude Code (and from
+`mcp-server-batocera call`, which asks on the terminal), until other apps show confirmation prompts. Saving
+a state (`batocera_save_state`) overwrites the current slot but is routine, so it is `everyday` and asks
+nothing; there is no reboot or shutdown tool.
+
 Play counts and play time come from EmulationStation itself (it records them in its game lists), so
 "what have we played most?" works without Home Assistant.
 
@@ -236,7 +259,8 @@ saying what to fix.
 - **Endpoints that change the system aren't reachable:** `/quit`, `/restart`, `/addgames`,
   `/removegames`, metadata and media uploads, `/input` (simulated key presses) and `/storage/event`.
 - **One game at a time, on purpose.** `launch_game` won't replace a running game; quitting is a separate
-  tool marked destructive, so MCP clients ask before ending someone's game.
+  tool that asks the person to confirm (and is marked destructive, so MCP clients ask too) before ending
+  someone's game.
 - **Rate limits against runaway loops.** `launch_game` and `quit_game` share a budget of 3 (one more every
   5 s), and `reload_games` has its own of 2 (one more every 20 s). Past that, a call is refused with how long
   to wait. Dry runs and calls that change nothing (already running, nothing to quit) don't count.
