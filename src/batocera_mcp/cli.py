@@ -19,6 +19,9 @@ import os
 import sys
 from pathlib import Path
 
+from mcp.client.context import ClientRequestContext
+from mcp_types import ElicitRequestParams, ElicitResult
+
 from . import __version__, remote
 from .config import flag, load_settings
 from .logsafe import setup_logging
@@ -87,6 +90,20 @@ def _parse_args(raw_args: list[str]) -> dict[str, object] | None:
     return out
 
 
+async def _confirm_on_terminal(context: ClientRequestContext, params: ElicitRequestParams) -> ElicitResult:
+    """Answer a costly tool's confirmation (remote.py's ``@tier``) by asking the person at this terminal.
+
+    The model never sees this: the prompt goes to stderr and the answer comes from stdin. With no terminal to
+    ask on (a pipe, a script), it declines, so a costly tool cannot run unattended through ``call``.
+    """
+    print(params.message, file=sys.stderr)
+    if not sys.stdin.isatty():
+        print("(no terminal to ask on; not confirmed)", file=sys.stderr)
+        return ElicitResult(action="decline")
+    answer = await asyncio.to_thread(input, "Go ahead? [y/N] ")
+    return ElicitResult(action="accept", content={"confirm": answer.strip().lower() in ("y", "yes")})
+
+
 async def _cmd_call(tool: str, raw_args: list[str]) -> int:
     """One tool call through the real MCP layer, as the model would make it."""
     from mcp import Client
@@ -96,7 +113,7 @@ async def _cmd_call(tool: str, raw_args: list[str]) -> int:
     tool_args = _parse_args(raw_args)
     if tool_args is None:
         return 2
-    async with Client(mcp) as c:
+    async with Client(mcp, elicitation_callback=_confirm_on_terminal) as c:
         if tool == "tools":
             for t in (await c.list_tools()).tools:
                 print(f"{t.name:<24} {(t.description or '').splitlines()[0]}")

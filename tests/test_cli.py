@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 
 import pytest
@@ -119,6 +120,30 @@ def test_call_dry_run_sends_nothing(env, capsys):
     code, out, _ = run(["call", "--dry-run", "launch_game", "system=snes", f"game_id={gid}"], capsys)
     assert code == 0 and json.loads(out)["outcome"] == "dry_run"
     assert env.calls("/launch") == []
+
+
+def test_call_costly_tool_declines_without_a_terminal(env, capsys, monkeypatch):
+    # The confirmation of @tier("costly") is answered on the terminal; piped, there is none, so nothing runs.
+    env.play("snes")
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    code, _, err = run(["call", "reset_game"], capsys)
+    assert code == 1 and "Reset the running game?" in err and "Not confirmed; nothing was done." in err
+    assert env.ra_commands == []
+
+
+@pytest.mark.parametrize(("answer", "code", "sent"), [("y", 0, ["RESET"]), ("n", 1, []), ("", 1, [])])
+def test_call_costly_tool_asks_on_the_terminal(env, capsys, monkeypatch, answer, code, sent):
+    env.play("snes")
+
+    class Tty(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    monkeypatch.setattr("sys.stdin", Tty(""))
+    monkeypatch.setattr("builtins.input", lambda prompt="": answer)
+    got, _, err = run(["call", "reset_game"], capsys)
+    assert got == code and "Reset the running game?" in err
+    assert env.ra_commands == sent
 
 
 def test_call_reports_errors(env, capsys):

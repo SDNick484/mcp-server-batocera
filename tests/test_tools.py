@@ -13,12 +13,20 @@ import re
 
 import pytest
 from mcp import Client
+from mcp.types import ElicitResult
 
 from batocera_mcp import server
 from batocera_mcp.client import Game
 from batocera_mcp.config import Settings
 
 pytestmark = pytest.mark.anyio
+
+
+async def says_yes(context, params) -> ElicitResult:
+    """The person's yes to a costly tool's confirmation (remote.py's @tier). The tests below are about what
+    the tools do once confirmed; the confirmation itself is tested in test_confirmation_*."""
+    return ElicitResult(action="accept", content={"confirm": True})
+
 
 ALL_TOOLS = {
     "batocera_get_status",
@@ -55,14 +63,14 @@ ACTIONS = {
 @pytest.fixture
 async def mcp_client(settings, monkeypatch):
     monkeypatch.setattr(server, "load_settings", lambda: settings)
-    async with Client(server.mcp) as c:
+    async with Client(server.mcp, elicitation_callback=says_yes) as c:
         yield c
 
 
 @pytest.fixture
 async def dry_client(settings, monkeypatch):
     monkeypatch.setattr(server, "load_settings", lambda: dataclasses.replace(settings, dry_run=True))
-    async with Client(server.mcp) as c:
+    async with Client(server.mcp, elicitation_callback=says_yes) as c:
         yield c
 
 
@@ -153,7 +161,7 @@ async def test_status_idle(mcp_client):
 async def test_status_masks_lan_ip(monkeypatch, cabinet):
     lan_settings = Settings(url="http://192.168.1.50:1234", timeout_s=2.0, name="Cabinet")
     monkeypatch.setattr(server, "load_settings", lambda: lan_settings)
-    async with Client(server.mcp) as c:
+    async with Client(server.mcp, elicitation_callback=says_yes) as c:
         s = (await call(c, "batocera_get_status")).structured_content
         assert s["url"] == "http://x.x.x.50:1234"
 
@@ -498,6 +506,71 @@ async def test_state_screenshot_reset(mcp_client, cabinet):
     assert await ra_received(cabinet, 4) == ["SAVE_STATE", "LOAD_STATE", "SCREENSHOT", "RESET"]
 
 
+# --- Confirmation of the costly tools ------------------------------------------------------
+# quit_game, load_state and reset_game lose unsaved progress, so each asks the person first (@tier("costly")).
+COSTLY = {
+    "batocera_quit_game": "Quit the running game?",
+    "batocera_load_state": "Load the saved state?",
+    "batocera_reset_game": "Reset the running game?",
+}
+
+
+def answering(action: str, asked: list[str], *, confirm: bool = True):
+    async def callback(context, params) -> ElicitResult:
+        asked.append(params.message)
+        return ElicitResult(action=action, content={"confirm": confirm} if action == "accept" else None)
+
+    return callback
+
+
+@pytest.mark.parametrize("tool", COSTLY)
+async def test_costly_tool_asks_with_its_own_sentence_then_acts(settings, monkeypatch, cabinet, tool):
+    monkeypatch.setattr(server, "load_settings", lambda: settings)
+    cabinet.play("snes")
+    asked: list[str] = []
+    async with Client(server.mcp, elicitation_callback=answering("accept", asked)) as c:
+        assert (await act(c, tool))["outcome"] == "done"
+    assert len(asked) == 1 and asked[0].startswith(COSTLY[tool])
+    assert "lost" in asked[0]  # each sentence says what is lost
+
+
+@pytest.mark.parametrize("tool", COSTLY)
+@pytest.mark.parametrize(
+    "answer", [("accept", False), ("decline", True), ("cancel", True)], ids=["no", "decline", "cancel"]
+)
+async def test_costly_tool_does_nothing_unless_the_person_says_yes(settings, monkeypatch, cabinet, tool, answer):
+    monkeypatch.setattr(server, "load_settings", lambda: settings)
+    cabinet.play("snes")
+    action, confirm = answer
+    async with Client(server.mcp, elicitation_callback=answering(action, [], confirm=confirm)) as c:
+        r = await call(c, tool)
+    assert r.is_error and "Not confirmed; nothing was done." in text(r)
+    assert cabinet.running is not None and cabinet.ra_commands == []
+    assert not cabinet.calls("/emukill")
+
+
+@pytest.mark.parametrize("tool", COSTLY)
+async def test_costly_tool_refuses_where_the_app_cannot_ask(settings, monkeypatch, cabinet, tool):
+    monkeypatch.setattr(server, "load_settings", lambda: settings)
+    cabinet.play("snes")
+    async with Client(server.mcp) as c:  # no elicitation capability
+        r = await call(c, tool)
+    assert r.is_error and "can't ask" in text(r)
+    assert cabinet.running is not None and cabinet.ra_commands == []
+
+
+async def test_save_state_never_asks(settings, monkeypatch, cabinet):
+    # Saving is ordinary use (everyday), even though it overwrites the slot: no prompt.
+    monkeypatch.setattr(server, "load_settings", lambda: settings)
+    cabinet.play("snes")
+
+    async def never(context, params) -> ElicitResult:
+        raise AssertionError("save_state asked for a confirmation")
+
+    async with Client(server.mcp, elicitation_callback=never) as c:
+        assert (await act(c, "batocera_save_state"))["outcome"] == "done"
+
+
 @pytest.mark.parametrize(
     ("args", "expected"),
     [
@@ -759,7 +832,7 @@ async def test_each_session_starts_with_full_buckets(settings, monkeypatch, cabi
     # lifespan() rebuilds the buckets, so one session's spent tokens never carry into the next.
     monkeypatch.setattr(server, "load_settings", lambda: settings)
     for _ in range(2):
-        async with Client(server.mcp) as c:
+        async with Client(server.mcp, elicitation_callback=says_yes) as c:
             for _ in range(2):
                 assert (await act(c, "reload_games"))["outcome"] == "done"
             assert rate_limited(await call(c, "reload_games"), "rescan the game lists")
@@ -783,7 +856,7 @@ async def test_unreachable_cabinet(settings, monkeypatch):
     import dataclasses as dc
 
     monkeypatch.setattr(server, "load_settings", lambda: dc.replace(settings, url="http://127.0.0.1:9"))
-    async with Client(server.mcp) as c:
+    async with Client(server.mcp, elicitation_callback=says_yes) as c:
         s = (await c.call_tool("batocera_get_status", {})).structured_content
         assert s["reachable"] is False and "public web access" in s["error"]
         r = await c.call_tool("batocera_quit_game", {})

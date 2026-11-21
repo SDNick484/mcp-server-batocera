@@ -19,11 +19,17 @@ Safety shape (the same idea as the Shield's key and app allow-lists):
   - **RetroArch gets constants only**, plus SHOW_MSG with validated text.
   - The destructive tools (batocera_quit_game, batocera_load_state, batocera_reset_game) lose unsaved
     progress, so they carry destructive_hint=True and clients ask first.
+  - **Every tool has an authorization tier** (``@tier``, from remote.py, directly under ``@mcp.tool``): read,
+    power-off, everyday or costly. The three destructive tools are costly: the person must confirm in a
+    prompt the model can't answer, and they refuse where the app can't show it. Automated callers (Access
+    service tokens) get only the tiers in MCP_AUTOMATION_TIERS. The resources call the functions under
+    ``@tier`` (``inspect.unwrap``): they are read-only and there is no tool call to authorize.
 """
 
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import random
@@ -42,6 +48,7 @@ from .client import BatoceraError, EmulationStationClient, Game, GameDetails, Sy
 from .config import load_settings
 from .logsafe import mask_url
 from .ratelimit import TokenBucket, refusal
+from .remote import request_state_security, tier
 from .retroarch import RetroArchClient, RetroArchStatus
 from .tools import ACT, ACT_IDEMPOTENT, DESTRUCTIVE, READ_ONLY
 
@@ -124,6 +131,7 @@ mcp = MCPServer(
         "unsaved progress, so confirm with the user before quitting a game someone may be playing."
     ),
     lifespan=lifespan,
+    request_state_security=request_state_security(),
 )
 
 T = TypeVar("T")
@@ -157,6 +165,7 @@ class Status(TypedDict):
 
 
 @mcp.tool(title="Get Batocera status", annotations=READ_ONLY)
+@tier("read")
 async def batocera_get_status() -> Status:
     """
     <use_case>
@@ -203,6 +212,7 @@ class SystemList(TypedDict):
 
 
 @mcp.tool(title="List game systems", annotations=READ_ONLY)
+@tier("read")
 async def batocera_list_systems() -> SystemList:
     """
     <use_case>
@@ -245,6 +255,7 @@ class GameList(TypedDict):
 
 
 @mcp.tool(title="Find games", annotations=READ_ONLY)
+@tier("read")
 async def batocera_find_games(
     query: Annotated[
         str | None,
@@ -334,6 +345,7 @@ async def batocera_find_games(
 
 
 @mcp.tool(title="Get game details", annotations=READ_ONLY)
+@tier("read")
 async def batocera_get_game(system: SystemArg, game_id: GameIdArg) -> GameDetails:
     """
     <use_case>
@@ -401,6 +413,7 @@ async def _wait_for(check: Callable[[], Any], timeout: float) -> Any:
 
 
 @mcp.tool(title="Launch a game", annotations=ACT_IDEMPOTENT)
+@tier("everyday")
 async def batocera_launch_game(system: SystemArg, game_id: GameIdArg) -> ActionResult:
     """
     <use_case>
@@ -455,6 +468,7 @@ async def batocera_launch_game(system: SystemArg, game_id: GameIdArg) -> ActionR
 
 
 @mcp.tool(title="Quit the running game", annotations=DESTRUCTIVE)
+@tier("costly", confirm="Quit the running game? Anything not saved in it is lost.")
 async def batocera_quit_game() -> ActionResult:
     """
     <use_case>
@@ -485,6 +499,7 @@ async def batocera_quit_game() -> ActionResult:
 
 
 @mcp.tool(title="Show a message on screen", annotations=ACT)
+@tier("everyday")
 async def batocera_show_message(
     text: Annotated[str, Field(min_length=1, max_length=300)],
     style: Annotated[
@@ -536,6 +551,7 @@ async def batocera_show_message(
 
 
 @mcp.tool(title="Rescan game lists", annotations=ACT_IDEMPOTENT)
+@tier("everyday")
 async def batocera_reload_games() -> ActionResult:
     """
     <use_case>
@@ -569,6 +585,7 @@ async def _retroarch(command: str, verb: str, done: str, bucket: TokenBucket | N
 
 
 @mcp.tool(title="Pause or resume", annotations=ACT_IDEMPOTENT)
+@tier("everyday")
 async def batocera_pause_game(paused: bool) -> ActionResult:
     """
     <use_case>
@@ -595,6 +612,7 @@ async def batocera_pause_game(paused: bool) -> ActionResult:
 
 
 @mcp.tool(title="Save state", annotations=ACT)
+@tier("everyday")
 async def batocera_save_state() -> ActionResult:
     """
     <use_case>
@@ -611,6 +629,7 @@ async def batocera_save_state() -> ActionResult:
 
 
 @mcp.tool(title="Load state", annotations=DESTRUCTIVE)
+@tier("costly", confirm="Load the saved state? Progress since the last save in the current slot is lost.")
 async def batocera_load_state() -> ActionResult:
     """
     <use_case>
@@ -627,6 +646,7 @@ async def batocera_load_state() -> ActionResult:
 
 
 @mcp.tool(title="Take a screenshot", annotations=ACT)
+@tier("everyday")
 async def batocera_take_screenshot() -> ActionResult:
     """
     <use_case>
@@ -643,6 +663,7 @@ async def batocera_take_screenshot() -> ActionResult:
 
 
 @mcp.tool(title="Reset the game", annotations=DESTRUCTIVE)
+@tier("costly", confirm="Reset the running game? It restarts from the beginning and anything not saved is lost.")
 async def batocera_reset_game() -> ActionResult:
     """
     <use_case>
@@ -673,6 +694,7 @@ _SLOT: dict[str, tuple[str, str, str]] = {
 
 
 @mcp.tool(title="Adjust game volume", annotations=ACT_IDEMPOTENT)
+@tier("everyday")
 async def batocera_adjust_volume(action: Literal["up", "down", "mute"]) -> ActionResult:
     """
     <use_case>
@@ -688,6 +710,7 @@ async def batocera_adjust_volume(action: Literal["up", "down", "mute"]) -> Actio
 
 
 @mcp.tool(title="Change save state slot", annotations=ACT)
+@tier("everyday")
 async def batocera_change_save_slot(direction: Literal["next", "previous"]) -> ActionResult:
     """
     <use_case>
@@ -705,7 +728,8 @@ async def batocera_change_save_slot(direction: Literal["next", "previous"]) -> A
 
 # --- Resources and prompts ---------------------------------------------------------
 # Resources are read-only data a client can attach as context, without a tool call. Each returns JSON text.
-# They call the same functions the tools use, so validation happens in one place. A game record only leaves
+# They call the same functions the tools use (``inspect.unwrap``: the function under @tier, since a resource has no
+# tool call to authorize and both are read-only), so validation happens in one place. A game record only leaves
 # through to_game(), which drops the internal ROM path: the model never sees where a file lives on disk.
 @contextmanager
 def _resource_errors() -> Iterator[None]:
@@ -721,14 +745,14 @@ def _resource_errors() -> Iterator[None]:
 async def systems_resource() -> str:
     """Game systems with game counts, as batocera_list_systems returns them."""
     with _resource_errors():
-        return json.dumps(await batocera_list_systems())
+        return json.dumps(await inspect.unwrap(batocera_list_systems)())
 
 
 @mcp.resource("batocera://status", mime_type="application/json")
 async def status_resource() -> str:
     """Whether the cabinet is reachable and what is running, as batocera_get_status returns it."""
     with _resource_errors():
-        return json.dumps(await batocera_get_status())
+        return json.dumps(await inspect.unwrap(batocera_get_status)())
 
 
 @mcp.resource("batocera://games/{system}", mime_type="application/json")
