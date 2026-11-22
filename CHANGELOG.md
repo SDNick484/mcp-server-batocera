@@ -4,6 +4,7 @@
 
 ### Added
 
+- `GET /batocera/mcp/healthz`, the health check under the MCP path (the only one a tunnel routing `batocera/*` reaches), and both health routes report the installed `commit` and `repo` from `/opt/mcp-server-batocera/COMMIT`, which `deploy/alpine/install.sh` now writes (pinning the default source to `main`'s current commit first). `remote.py` and the new `deploy/alpine/commit.sh` synced from mcp-server-shared a48209b.
 - Every tool now has an authorization tier (`read`, `power-off`, `everyday` or `costly`), from the shared `remote.py`. The costly tools, `batocera_quit_game`, `batocera_load_state` and `batocera_reset_game`, ask the person to confirm before they run, and refuse where the app can't show the prompt or the answer isn't an explicit yes. `mcp-server-batocera call` asks on the terminal.
 - `MCP_ALLOWED_SERVICE_TOKENS` and `MCP_AUTOMATION_TIERS` settings (README, `deploy/alpine/env.example`).
 

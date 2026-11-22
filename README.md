@@ -192,7 +192,10 @@ To use it as a connector, with cloudflared running on the same machine (keep the
    `CF_ACCESS_AUD=<the AUD tag>`, then `rc-service mcp-server-batocera restart`.
 4. **The connector:** `https://mcp.example.com/batocera/mcp`.
 
-`GET /healthz` answers without auth, for monitoring. Details are in `src/batocera_mcp/remote.py`.
+`GET /healthz` and `GET /batocera/mcp/healthz` (the one a tunnel that routes only `batocera/*` reaches)
+answer without auth, for monitoring, with the commit the install script stamped (`"commit"`, `"repo"`; from
+`/opt/mcp-server-batocera/COMMIT`). From outside: `curl -s https://mcp.example.com/batocera/mcp/healthz`.
+Details are in `src/batocera_mcp/remote.py`.
 
 ## Tools
 
