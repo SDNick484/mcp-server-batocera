@@ -246,8 +246,8 @@ ALL_NAMES = [
 async def test_find_games_schema_has_paging_and_filters(mcp_client):
     props = (await tools(mcp_client))["batocera_find_games"].input_schema["properties"]
     assert props["offset"]["minimum"] == 0 and props["offset"]["default"] == 0
-    assert props["genre"]["anyOf"][0]["maxLength"] == 50
-    assert props["players"]["anyOf"][0]["maxLength"] == 10
+    assert props["genre"]["maxLength"] == 50
+    assert props["players"]["maxLength"] == 10
     assert "random" in props["sort"]["enum"]
 
 

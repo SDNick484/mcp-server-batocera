@@ -50,7 +50,7 @@ from .logsafe import mask_url
 from .ratelimit import TokenBucket, refusal
 from .remote import request_state_security, tier
 from .retroarch import RetroArchClient, RetroArchStatus
-from .tools import ACT, ACT_IDEMPOTENT, DESTRUCTIVE, READ_ONLY
+from .tools import ACT, ACT_IDEMPOTENT, DESTRUCTIVE, READ_ONLY, trim_tools
 
 log = logging.getLogger(__name__)
 
@@ -724,6 +724,10 @@ async def batocera_change_save_slot(direction: Literal["next", "previous"]) -> A
     """
     command, verb, done = _SLOT[direction]
     return await _retroarch(command, verb, done, bucket=None)
+
+
+# Every tool is registered by now: shorten what tools/list sends (see tools.py).
+trim_tools(mcp)
 
 
 # --- Resources and prompts ---------------------------------------------------------
